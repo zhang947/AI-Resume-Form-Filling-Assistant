@@ -21,7 +21,7 @@
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     apiKey: "",
-    model: "deepseek-chat",
+    model: "deepseek-flash",
     builtin: true,
   });
 
@@ -52,9 +52,25 @@
       name: text(model.name) || "自定义模型",
       baseUrl: text(model.baseUrl),
       apiKey: text(model.apiKey),
-      model: text(model.model),
+      model: normalizeApiModel(model.baseUrl, model.model),
       builtin: Boolean(model.builtin),
     };
+  }
+
+  function normalizeApiModel(baseUrl, value) {
+    const model = text(value);
+    let hostname;
+    try {
+      hostname = new URL(text(baseUrl)).hostname;
+    } catch (_) {
+      return model;
+    }
+    if (hostname === "api.deepseek.com") {
+      if (["deepseek", "deepseek-chat"].includes(model.toLowerCase())) {
+        return "deepseek-flash";
+      }
+    }
+    return model;
   }
 
   function normalizeModels(value) {

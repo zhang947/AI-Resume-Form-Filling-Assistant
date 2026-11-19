@@ -9,7 +9,7 @@ test("popup fallback injection includes all shared content helpers", () => {
     "utf8"
   );
 
-  assert.match(source, /shared\/resume-schema\.js/);
+  assert.match(source, /shared\/form-plan\.js/);
   assert.match(source, /shared\/diagnostics\.js/);
   assert.match(source, /shared\/field-text\.js/);
   assert.match(source, /shared\/field-semantics\.js/);

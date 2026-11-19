@@ -4,35 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-function loadParser(fileName, stopFunctionName) {
-  const source = fs.readFileSync(
-    path.join(__dirname, `../${fileName}`),
-    "utf8"
-  );
-  const marker = `function ${stopFunctionName}(`;
-  const start = source.indexOf("function parseJsonFromAiText(text) {");
-  const end = source.indexOf(marker, start);
-
-  assert.notEqual(start, -1, `${fileName} should contain parseJsonFromAiText`);
-  assert.notEqual(end, -1, `${fileName} should contain ${stopFunctionName}`);
-
-  const snippet = source.slice(start, end);
-  const context = {
-    module: { exports: {} },
-    exports: {},
-  };
-
-  vm.createContext(context);
-  vm.runInContext(
-    `${snippet}\nmodule.exports = { parseJsonFromAiText };`,
-    context
-  );
-
-  return context.module.exports.parseJsonFromAiText;
-}
-
-const popupParser = loadParser("popup.js", "updateStatus");
-const editorParser = loadParser("resume-editor.js", "updatePageStatus");
+const { parseJsonFromAiText } = require("../shared/form-plan.js");
+const popupParser = parseJsonFromAiText, editorParser = parseJsonFromAiText;
 
 for (const [name, parseJsonFromAiText] of [
   ["popup", popupParser],

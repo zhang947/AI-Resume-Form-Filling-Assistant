@@ -1,492 +1,188 @@
 (function initResumeStorage(root) {
   "use strict";
-
-  const keys = Object.freeze({
-    // 多模板存储
-    templates: "resumeTemplates",
-    activeTemplateId: "activeResumeTemplateId",
-    // 旧版单模板 key（仅用于一次性迁移，迁移完成后清理）
-    profile: "resumeProfile",
-    schemaVersion: "resumeSchemaVersion",
-    rawText: "resumeImportRawText",
-    legacyProfile: "resumeStructured",
-    legacyRawText: "resumeRawText",
-  });
-
+  const keys = Object.freeze({ templates: "resumeDocumentsV1", activeTemplateId: "activeResumeDocumentId",
+    migrationBackup: "resumeMarkdownMigrationBackupV1", profile: "resumeProfile", rawText: "resumeImportRawText" });
   const DEFAULT_TEMPLATE_ID = "tpl-default";
-  const DEFAULT_TEMPLATE_NAME = "默认简历";
-
-  const legacyResumeKeys = [keys.profile, keys.schemaVersion, keys.rawText];
-  const legacyOldKeys = [keys.legacyProfile, keys.legacyRawText];
-  const allLegacyKeys = [...legacyResumeKeys, ...legacyOldKeys];
-
-  function hasOwn(data, key) {
-    return Object.prototype.hasOwnProperty.call(data || {}, key);
-  }
-
-  function text(value) {
-    return String(value ?? "").trim();
-  }
-
-  function nowIso() {
-    return new Date().toISOString();
-  }
-
-  function makeId() {
-    return `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  }
-
-  function clone(value) {
-    if (typeof structuredClone === "function") {
-      return structuredClone(value);
-    }
-    return JSON.parse(JSON.stringify(value));
-  }
-
-  function getStorage(storageOverride) {
-    const storage = storageOverride || root?.chrome?.storage;
-    if (!storage?.local?.get || !storage?.local?.set) {
-      throw new Error("扩展本地存储不可用");
-    }
+  const legacyKeys = ["resumeTemplates", "activeResumeTemplateId", "resumeProfile", "resumeSchemaVersion", "resumeImportRawText", "resumeStructured", "resumeRawText"];
+  const now = () => new Date().toISOString();
+  const own = (v, k) => Object.prototype.hasOwnProperty.call(v || {}, k);
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const makeId = () => `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const hasValue = (v) => v != null && (typeof v === "object" ? Object.values(v).some(hasValue) : String(v).trim() !== "");
+  function getStorage(override) {
+    const storage = override || root.chrome?.storage;
+    if (!storage?.local?.get || !storage?.local?.set) throw new Error("扩展本地存储不可用");
     return storage;
   }
-
-  function isMeaningfulProfile(value) {
-    return Boolean(
-      value &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        hasMeaningfulValue(value)
-    );
-  }
-
-  function hasMeaningfulValue(value) {
-    if (value == null) return false;
-    if (typeof value === "string") return value.trim().length > 0;
-    if (Array.isArray(value)) return value.some(hasMeaningfulValue);
-    if (typeof value === "object") {
-      return Object.values(value).some(hasMeaningfulValue);
+  // Only migration uses schema labels; unknown keys and unlimited list items survive.
+  function profileToMarkdown(profile, rawText = "") {
+    const sections = root.ResumeSchema?.sections || [];
+    function render(value, definition, depth = 0) {
+      if (value == null || value === "") return [];
+      if (Array.isArray(value)) return value.flatMap((item, index) => {
+        const lines = render(item, definition, depth + 1);
+        return lines.length ? [`${"  ".repeat(depth)}- 第 ${index + 1} 项`, ...lines] : [];
+      });
+      if (typeof value === "object") return Object.entries(value).flatMap(([key, item]) => {
+        const field = definition?.fields?.find((entry) => entry.key === key);
+        if (item == null || item === "") return [];
+        if (typeof item === "object") {
+          const lines = render(item, field, depth + 1);
+          return lines.length ? [`${"  ".repeat(depth)}- ${field?.label || key}：`, ...lines] : [];
+        }
+        return [`${"  ".repeat(depth)}- ${field?.label || key}：${String(item)}`];
+      });
+      return [`${"  ".repeat(depth)}- ${String(value)}`];
     }
-    return Boolean(value);
-  }
-
-  function pickStoredValue(candidates, { preferMeaningful = false } = {}) {
-    let fallback = { found: false, value: undefined };
-    for (const candidate of candidates) {
-      if (hasOwn(candidate.data, candidate.key)) {
-        const entry = { found: true, value: candidate.data[candidate.key] };
-        if (!preferMeaningful || isMeaningfulProfile(entry.value)) return entry;
-        fallback = entry;
-      }
+    const parts = [];
+    for (const [key, value] of Object.entries(profile || {})) {
+      const section = sections.find((entry) => entry.key === key);
+      const lines = render(value, section);
+      if (lines.length) parts.push(`## ${section?.label || key}\n\n${lines.join("\n")}`);
     }
-    return fallback;
+    if (String(rawText).trim()) parts.push(`## 历史原始简历（待核对）\n\n以下保留导入原文，可能与上方后来修改的信息冲突；冲突内容请核对，不能自动采用。\n\n${rawText}`);
+    return parts.join("\n\n");
   }
-
   function normalizeTemplate(value, fallbackId) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const id = text(value.id) || fallbackId;
-    if (!id) return null;
-
-    const profile =
-      value.profile &&
-      typeof value.profile === "object" &&
-      !Array.isArray(value.profile)
-        ? value.profile
-        : {};
-
-    return {
-      id,
-      name: text(value.name) || DEFAULT_TEMPLATE_NAME,
-      profile,
-      rawText: text(value.rawText),
-      schemaVersion: value.schemaVersion,
-      createdAt: text(value.createdAt) || nowIso(),
-      updatedAt: text(value.updatedAt) || nowIso(),
-    };
+    if (typeof value.markdown !== "string" && typeof value.rawText !== "string" &&
+      (!value.profile || typeof value.profile !== "object" || Array.isArray(value.profile))) return null;
+    return { id: String(value.id || fallbackId || makeId()), name: String(value.name || "默认资料").trim() || "默认资料",
+      markdown: typeof value.markdown === "string" ? value.markdown : profileToMarkdown(value.profile || {}, value.rawText || ""),
+      createdAt: value.createdAt || now(), updatedAt: value.updatedAt || now() };
   }
-
-  function normalizeTemplateMap(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  function normalizeTemplates(value) {
+    if (!value || typeof value !== "object") return [];
+    const entries = Array.isArray(value) ? value.map((item, index) => [String(index), item]) : Object.entries(value);
     const seen = new Set();
-    const result = [];
-    for (const [id, template] of Object.entries(value)) {
-      const normalized = normalizeTemplate(template, id);
-      if (!normalized || seen.has(normalized.id)) continue;
-      seen.add(normalized.id);
-      result.push(normalized);
-    }
-    return result;
-  }
-
-  function toTemplateMap(templates) {
-    const map = {};
-    for (const template of templates || []) {
-      map[template.id] = template;
-    }
-    return map;
-  }
-
-  function buildEmptyTemplate(id, name) {
-    return {
-      id: id || makeId(),
-      name: text(name) || DEFAULT_TEMPLATE_NAME,
-      profile: {},
-      rawText: "",
-      schemaVersion: undefined,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    };
-  }
-
-  async function removeIfAvailable(area, keysToRemove) {
-    if (!area?.remove) return;
-    try {
-      await area.remove(keysToRemove);
-    } catch (error) {
-      console.warn("[resume-storage] 清理旧版简历数据失败", error);
-    }
-  }
-
-  async function loadLegacyResumeData(storage) {
-    const localData = await storage.local.get(allLegacyKeys);
-    const needsSyncFallback =
-      !isMeaningfulProfile(localData[keys.profile]) ||
-      !hasOwn(localData, keys.rawText) ||
-      !hasOwn(localData, keys.schemaVersion);
-    const syncData =
-      needsSyncFallback && storage.sync?.get
-        ? await storage.sync.get(allLegacyKeys)
-        : {};
-
-    const profileEntry = pickStoredValue(
-      [
-        { data: localData, key: keys.profile },
-        { data: localData, key: keys.legacyProfile },
-        { data: syncData, key: keys.profile },
-        { data: syncData, key: keys.legacyProfile },
-      ],
-      { preferMeaningful: true }
-    );
-    const rawTextEntry = pickStoredValue([
-      { data: localData, key: keys.rawText },
-      { data: localData, key: keys.legacyRawText },
-      { data: syncData, key: keys.rawText },
-      { data: syncData, key: keys.legacyRawText },
-    ]);
-    const schemaVersionEntry = pickStoredValue([
-      { data: localData, key: keys.schemaVersion },
-      { data: syncData, key: keys.schemaVersion },
-    ]);
-
-    return {
-      profile:
-        profileEntry.found &&
-        profileEntry.value &&
-        typeof profileEntry.value === "object"
-          ? profileEntry.value
-          : {},
-      rawText: rawTextEntry.found ? String(rawTextEntry.value || "") : "",
-      schemaVersion: schemaVersionEntry.found
-        ? schemaVersionEntry.value
-        : undefined,
-    };
-  }
-
-  function persistTemplates(storage, templates, activeTemplateId) {
-    return storage.local.set({
-      [keys.templates]: toTemplateMap(templates),
-      [keys.activeTemplateId]: activeTemplateId,
+    return entries.map(([key, item]) => normalizeTemplate(item, key)).filter((item) => {
+      if (!item || seen.has(item.id)) return false;
+      seen.add(item.id); return true;
     });
   }
-
-  async function loadTemplateState(storageOverride) {
-    const storage = getStorage(storageOverride);
-    const localData = await storage.local.get([
-      keys.templates,
-      keys.activeTemplateId,
-      ...allLegacyKeys,
-    ]);
-
-    let templates = normalizeTemplateMap(localData[keys.templates]);
-    let activeTemplateId = text(localData[keys.activeTemplateId]);
-
-    // 旧版单模板 → 迁移为默认模板
-    if (!hasOwn(localData, keys.templates)) {
-      const legacy = await loadLegacyResumeData(storage);
-      const migrated = buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME);
-      migrated.profile = legacy.profile;
-      migrated.rawText = legacy.rawText;
-      migrated.schemaVersion = legacy.schemaVersion;
-      templates = [migrated];
-      activeTemplateId = DEFAULT_TEMPLATE_ID;
-      await persistTemplates(storage, templates, activeTemplateId);
+  async function persist(storage, templates, activeTemplateId) {
+    const map = Object.create(null);
+    for (const template of templates) map[template.id] = template;
+    await storage.local.set({ [keys.templates]: map, [keys.activeTemplateId]: activeTemplateId });
+  }
+  async function loadTemplateState(override) {
+    const storage = getStorage(override);
+    const local = await storage.local.get([keys.templates, keys.activeTemplateId, keys.migrationBackup, ...legacyKeys]);
+    let templates = normalizeTemplates(local[keys.templates]);
+    let activeTemplateId = local[keys.activeTemplateId];
+    let changed = !templates.length;
+    if (!own(local, keys.templates)) {
+      const sync = storage.sync?.get ? await storage.sync.get(legacyKeys) : {};
+      const legacy = { ...sync, ...local };
+      templates = normalizeTemplates(local.resumeTemplates);
+      if (!templates.length) templates = normalizeTemplates(sync.resumeTemplates);
+      if (!templates.length) {
+        const meaningful = (v) => v && typeof v === "object" && hasValue(v);
+        const profile = [local.resumeProfile, local.resumeStructured, sync.resumeProfile, sync.resumeStructured].find(meaningful) || {};
+        templates = [normalizeTemplate({ id: DEFAULT_TEMPLATE_ID, profile,
+          rawText: local.resumeImportRawText ?? local.resumeRawText ?? sync.resumeImportRawText ?? sync.resumeRawText ?? "" })];
+      }
+      activeTemplateId = legacy.activeResumeTemplateId;
+      // Persist a recovery copy before committing or removing any legacy records.
+      if (!own(local, keys.migrationBackup)) {
+        const pick = (data) => Object.fromEntries(legacyKeys.filter((key) => own(data, key)).map((key) => [key, data[key]]));
+        await storage.local.set({ [keys.migrationBackup]: { version: 1, createdAt: now(), local: pick(local), sync: pick(sync) } });
+      }
+      changed = true;
     }
-
-    // 保证至少有一个模板
-    if (templates.length === 0) {
-      templates = [buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME)];
-      activeTemplateId = DEFAULT_TEMPLATE_ID;
-      await persistTemplates(storage, templates, activeTemplateId);
+    if (!templates.length) templates = [normalizeTemplate({ id: DEFAULT_TEMPLATE_ID, markdown: "" })];
+    if (!templates.some((item) => item.id === activeTemplateId)) { activeTemplateId = templates[0].id; changed = true; }
+    if (changed) await persist(storage, templates, activeTemplateId);
+    for (const area of [storage.local, storage.sync]) {
+      try { await area?.remove?.(legacyKeys); } catch (error) { console.warn("旧资料清理失败", error); }
     }
-
-    // 保证 active 指向存在的模板
-    if (!templates.some((template) => template.id === activeTemplateId)) {
-      activeTemplateId = templates[0].id;
-      await storage.local.set({ [keys.activeTemplateId]: activeTemplateId });
-    }
-
-    // 清理旧 key
-    await removeIfAvailable(storage.local, allLegacyKeys);
-    await removeIfAvailable(storage.sync, allLegacyKeys);
-
     return { templates, activeTemplateId };
   }
-
-  async function saveTemplateContent(id, content, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const targetId = text(id);
-    if (!targetId) return null;
-
+  async function saveTemplateContent(targetId, content, override) {
+    const storage = getStorage(override);
     const state = await loadTemplateState(storage);
-    const index = state.templates.findIndex(
-      (template) => template.id === targetId
-    );
-    if (index === -1) {
-      console.warn("[resume-storage] 保存内容时未找到模板:", targetId);
-      return null;
-    }
-
-    const next = { ...state.templates[index] };
-    if (content && typeof content === "object") {
-      if (hasOwn(content, "profile")) {
-        next.profile =
-          content.profile &&
-          typeof content.profile === "object" &&
-          !Array.isArray(content.profile)
-            ? content.profile
-            : {};
-      }
-      if (hasOwn(content, "rawText")) {
-        next.rawText = text(content.rawText);
-      }
-      if (hasOwn(content, "schemaVersion")) {
-        next.schemaVersion = content.schemaVersion;
-      }
-    }
-    next.updatedAt = nowIso();
-
-    state.templates[index] = next;
-    await persistTemplates(storage, state.templates, state.activeTemplateId);
-    return next;
+    const target = state.templates.find((item) => item.id === targetId);
+    if (!target) throw new Error("资料不存在，请重新加载");
+    if (typeof content?.markdown !== "string") throw new Error("资料必须是 Markdown 文本");
+    target.markdown = content.markdown; target.updatedAt = now();
+    await persist(storage, state.templates, state.activeTemplateId); return target;
   }
-
-  async function createTemplate(name, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const state = await loadTemplateState(storage);
-    const template = buildEmptyTemplate(makeId(), name || "新简历模板");
-    await persistTemplates(storage, [...state.templates, template], state.activeTemplateId);
-    return template;
+  async function createTemplate(name, override) {
+    const storage = getStorage(override); const state = await loadTemplateState(storage);
+    const template = normalizeTemplate({ id: makeId(), name: name || "新资料", markdown: "" });
+    await persist(storage, [...state.templates, template], state.activeTemplateId); return template;
   }
-
-  async function duplicateTemplate(id, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const state = await loadTemplateState(storage);
-    const source = state.templates.find(
-      (template) => template.id === text(id)
-    );
-    if (!source) throw new Error("要复制的模板不存在");
-
-    const duplicate = buildEmptyTemplate(makeId(), `${source.name} 副本`);
-    duplicate.profile = clone(source.profile || {});
-    duplicate.rawText = source.rawText || "";
-    duplicate.schemaVersion = source.schemaVersion;
-
-    await persistTemplates(
-      storage,
-      [...state.templates, duplicate],
-      state.activeTemplateId
-    );
-    return duplicate;
+  async function duplicateTemplate(targetId, override) {
+    const storage = getStorage(override); const state = await loadTemplateState(storage);
+    const source = state.templates.find((item) => item.id === targetId);
+    if (!source) throw new Error("要复制的资料不存在");
+    const template = normalizeTemplate({ id: makeId(), name: `${source.name} 副本`, markdown: source.markdown });
+    await persist(storage, [...state.templates, template], state.activeTemplateId); return template;
   }
-
-  async function renameTemplate(id, name, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const state = await loadTemplateState(storage);
-    const targetId = text(id);
-    const nextName = text(name);
-    if (!nextName) throw new Error("模板名称不能为空");
-
-    const templates = state.templates.map((template) =>
-      template.id === targetId
-        ? { ...template, name: nextName, updatedAt: nowIso() }
-        : template
-    );
-
-    await persistTemplates(storage, templates, state.activeTemplateId);
-    return templates.find((template) => template.id === targetId) || null;
+  async function renameTemplate(targetId, name, override) {
+    if (!String(name).trim()) throw new Error("名称不能为空");
+    const storage = getStorage(override); const state = await loadTemplateState(storage);
+    const template = state.templates.find((item) => item.id === targetId);
+    if (!template) throw new Error("资料不存在");
+    template.name = String(name).trim(); template.updatedAt = now();
+    await persist(storage, state.templates, state.activeTemplateId); return template;
   }
-
-  async function deleteTemplate(id, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const state = await loadTemplateState(storage);
-    const targetId = text(id);
-
-    let templates = state.templates.filter(
-      (template) => template.id !== targetId
-    );
-    if (templates.length === 0) {
-      templates = [buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME)];
+  async function deleteTemplate(targetId, override) {
+    const storage = getStorage(override); const state = await loadTemplateState(storage);
+    let templates = state.templates.filter((item) => item.id !== targetId);
+    if (!templates.length) templates = [normalizeTemplate({ id: DEFAULT_TEMPLATE_ID, markdown: "" })];
+    const active = templates.some((item) => item.id === state.activeTemplateId) ? state.activeTemplateId : templates[0].id;
+    await persist(storage, templates, active); return active;
+  }
+  async function setActiveTemplateId(targetId, override) {
+    const storage = getStorage(override); const state = await loadTemplateState(storage);
+    if (!state.templates.some((item) => item.id === targetId)) throw new Error("资料不存在");
+    await storage.local.set({ [keys.activeTemplateId]: targetId }); return targetId;
+  }
+  async function exportTemplateData(override) {
+    return { app: "ai-resume-form-filling-assistant", kind: "resume-documents", version: 2,
+      exportedAt: now(), ...await loadTemplateState(override) };
+  }
+  async function exportMigrationBackup(override) {
+    const data = await getStorage(override).local.get([keys.migrationBackup]);
+    const backup = data[keys.migrationBackup];
+    if (!backup || (!Object.keys(backup.local || {}).length && !Object.keys(backup.sync || {}).length)) {
+      throw new Error("没有需要导出的旧版资料备份");
     }
-
-    let activeTemplateId = state.activeTemplateId;
-    if (
-      activeTemplateId === targetId ||
-      !templates.some((template) => template.id === activeTemplateId)
-    ) {
-      activeTemplateId = templates[0].id;
-    }
-
-    await persistTemplates(storage, templates, activeTemplateId);
-    return activeTemplateId;
+    const legacy = { ...(backup.sync || {}), ...(backup.local || {}) };
+    const templates = [backup.local?.resumeTemplates, backup.sync?.resumeTemplates].find((value) => normalizeTemplates(value).length)
+      || [{ id: DEFAULT_TEMPLATE_ID, name: "迁移前资料",
+      profile: [backup.local?.resumeProfile, backup.local?.resumeStructured,
+        backup.sync?.resumeProfile, backup.sync?.resumeStructured].find(hasValue) || {},
+      rawText: legacy.resumeImportRawText ?? legacy.resumeRawText ?? "" }];
+    return { ...clone(backup), kind: "resume-migration-backup", templates: clone(templates),
+      activeTemplateId: legacy.activeResumeTemplateId || DEFAULT_TEMPLATE_ID };
   }
-
-  async function setActiveTemplateId(id, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const state = await loadTemplateState(storage);
-    const targetId = text(id);
-    if (!state.templates.some((template) => template.id === targetId)) {
-      return state.activeTemplateId;
-    }
-    await storage.local.set({ [keys.activeTemplateId]: targetId });
-    return targetId;
+  async function importTemplateData(data, override) {
+    if (!data?.templates || typeof data.templates !== "object") throw new Error("导入文件格式不正确：缺少 templates");
+    const templates = normalizeTemplates(data.templates);
+    if (!templates.length) throw new Error("导入文件中没有有效资料");
+    const storage = getStorage(override); const previous = await loadTemplateState(storage);
+    await storage.local.set({ resumeDocumentsImportBackupV1: clone(previous) });
+    const activeTemplateId = templates.some((item) => item.id === data.activeTemplateId) ? data.activeTemplateId : templates[0].id;
+    await persist(storage, templates, activeTemplateId); return { templates, activeTemplateId };
   }
-
-  async function exportTemplateData(storageOverride) {
-    const state = await loadTemplateState(storageOverride);
-    return {
-      app: "ai-resume-form-filling-assistant",
-      kind: "resume-templates",
-      version: 1,
-      exportedAt: nowIso(),
-      activeTemplateId: state.activeTemplateId,
-      templates: state.templates,
-    };
+  async function exportActiveTemplateData(override) {
+    const state = await loadTemplateState(override);
+    return clone(state.templates.find((item) => item.id === state.activeTemplateId));
   }
-
-  async function importTemplateData(data, storageOverride) {
-    const storage = getStorage(storageOverride);
-
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      throw new Error("导入文件格式不正确：缺少 templates");
-    }
-
-    const rawTemplates = Array.isArray(data.templates)
-      ? data.templates
-      : data.templates && typeof data.templates === "object"
-        ? Object.values(data.templates)
-        : null;
-
-    if (!rawTemplates) {
-      throw new Error("导入文件格式不正确：缺少 templates");
-    }
-
-    let templates = rawTemplates
-      .map((template, index) =>
-        normalizeTemplate(
-          template,
-          typeof template?.id === "string" && template.id
-            ? template.id
-            : `tpl-import-${index}`
-        )
-      )
-      .filter(Boolean);
-
-    const seen = new Set();
-    templates = templates.filter((template) => {
-      if (seen.has(template.id)) return false;
-      seen.add(template.id);
-      return true;
-    });
-
-    if (templates.length === 0) {
-      templates = [buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME)];
-    }
-
-    let activeTemplateId = text(data.activeTemplateId);
-    if (!templates.some((template) => template.id === activeTemplateId)) {
-      activeTemplateId = templates[0].id;
-    }
-
-    await persistTemplates(storage, templates, activeTemplateId);
-    await removeIfAvailable(storage.local, allLegacyKeys);
-    await removeIfAvailable(storage.sync, allLegacyKeys);
-
-    return { templates, activeTemplateId };
+  async function importActiveTemplateData(data, override) {
+    const source = data?.template || data;
+    if (!source || (typeof source.markdown !== "string" && (!source.profile || typeof source.profile !== "object"))) throw new Error("导入文件缺少 Markdown 或旧版简历内容");
+    const state = await loadTemplateState(override);
+    return saveTemplateContent(state.activeTemplateId, { markdown: normalizeTemplate(source).markdown }, override);
   }
-
-  async function exportActiveTemplateData(storageOverride) {
-    const state = await loadTemplateState(storageOverride);
-    const active = state.templates.find(
-      (template) => template.id === state.activeTemplateId
-    );
-    return {
-      app: "ai-resume-form-filling-assistant",
-      kind: "resume-profile",
-      version: 1,
-      exportedAt: nowIso(),
-      name: active?.name || DEFAULT_TEMPLATE_NAME,
-      profile: clone(active?.profile || {}),
-      rawText: active?.rawText || "",
-      schemaVersion: active?.schemaVersion,
-    };
-  }
-
-  async function importActiveTemplateData(data, storageOverride) {
-    const storage = getStorage(storageOverride);
-    const source =
-      data?.kind === "resume-profile" ? data :
-      data?.template && typeof data.template === "object" ? data.template :
-      data;
-    if (!source || typeof source !== "object" || Array.isArray(source)) {
-      throw new Error("导入文件格式不正确：缺少 profile");
-    }
-    const profile =
-      source.profile && typeof source.profile === "object" && !Array.isArray(source.profile)
-        ? source.profile
-        : null;
-    if (!profile) throw new Error("导入文件格式不正确：缺少 profile");
-
-    const state = await loadTemplateState(storage);
-    const active = state.templates.find(
-      (template) => template.id === state.activeTemplateId
-    );
-    const next = {
-      ...(active || buildEmptyTemplate(state.activeTemplateId, DEFAULT_TEMPLATE_NAME)),
-      profile: clone(profile),
-      rawText: text(source.rawText),
-      schemaVersion: source.schemaVersion,
-      updatedAt: nowIso(),
-    };
-    const templates = state.templates.map((template) =>
-      template.id === state.activeTemplateId ? next : template
-    );
-    await persistTemplates(storage, templates, state.activeTemplateId);
-    return next;
-  }
-
-  root.ResumeStorage = Object.freeze({
-    keys,
-    DEFAULT_TEMPLATE_ID,
-    loadTemplateState,
-    saveTemplateContent,
-    createTemplate,
-    duplicateTemplate,
-    renameTemplate,
-    deleteTemplate,
-    setActiveTemplateId,
-    exportTemplateData,
-    importTemplateData,
-    exportActiveTemplateData,
-    importActiveTemplateData,
-  });
+  // Web Locks serialize read-modify-write operations across the side panel and editor tabs.
+  const locked = (fn) => (...args) => root.navigator?.locks?.request
+    ? root.navigator.locks.request("resume-documents-v1", () => fn(...args)) : fn(...args);
+  const operations = { loadTemplateState, saveTemplateContent, createTemplate, duplicateTemplate,
+    renameTemplate, deleteTemplate, setActiveTemplateId, exportTemplateData, importTemplateData,
+    exportActiveTemplateData, importActiveTemplateData, exportMigrationBackup };
+  root.ResumeStorage = Object.freeze({ keys, DEFAULT_TEMPLATE_ID, profileToMarkdown,
+    ...Object.fromEntries(Object.entries(operations).map(([name, fn]) => [name, locked(fn)])) });
 })(typeof window !== "undefined" ? window : globalThis);

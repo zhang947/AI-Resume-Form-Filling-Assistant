@@ -1,15 +1,12 @@
-// Content script: scan fields -> AI mapping to resume paths -> deterministic local fill.
+// Content script: scan fields -> AI answers from Markdown -> validated local fill.
 (function () {
   "use strict";
 
   if (window.__AI_RESUME_AUTOFILL_LOADED__) return;
   window.__AI_RESUME_AUTOFILL_LOADED__ = true;
 
-  const schema = window.ResumeSchema;
-  if (!schema) {
-    console.error("[简历填表助手] Resume schema not found");
-    return;
-  }
+  const formPlan = window.ResumeFormPlan;
+  if (!formPlan) return;
 
   const diagnostics = window.ResumeDiagnostics;
   if (!diagnostics) {
@@ -48,7 +45,6 @@
   }
 
   const EXT_TAG = "[简历填表助手]";
-  const MAPPING_CACHE_KEY = "fieldMappingCacheV3";
   const CONTROL_SELECTOR =
     'input, textarea, select, button, option, svg, path, style, script, noscript, [contenteditable="true"], [contenteditable=""], [aria-hidden="true"]';
   const LABEL_LIKE_SELECTOR =
@@ -96,21 +92,6 @@
     "cancel",
     "close",
   ];
-  const DEEP_SCAN_SECTION_MAP = [
-    { patterns: ["教育", "学校", "专业", "学历", "学位", "毕业"], sectionKey: "educations" },
-    { patterns: ["实习"], sectionKey: "internships" },
-    { patterns: ["工作", "公司", "职位", "任职", "职业"], sectionKey: "workExperiences" },
-    { patterns: ["项目", "产品"], sectionKey: "projects" },
-    { patterns: ["证书", "认证", "资格", "等级"], sectionKey: "certificates" },
-    { patterns: ["语言", "外语", "雅思", "托福", "cet"], sectionKey: "languages" },
-    { patterns: ["校园", "学生", "社团", "社会", "志愿", "科研", "组织"], sectionKey: "campusExperiences" },
-    { patterns: ["技能", "特长", "编程", "工具"], sectionKey: "skills" },
-    { patterns: ["偏好", "期望", "求职", "目标", "薪资"], sectionKey: "jobPreferences" },
-    { patterns: ["联系方式", "地址", "电话"], sectionKey: "contactAndLocation" },
-    { patterns: ["证件", "身份", "护照", "户口"], sectionKey: "identityAndAuthorization" },
-    { patterns: ["补充", "其他", "备注", "说明"], sectionKey: "additional" },
-  ];
-
   const fieldRuntimeMap = new Map();
   const radioScopeIds = new WeakMap();
   let radioScopeSequence = 0;
@@ -145,7 +126,7 @@
     }
 
     if (action === "startFill") {
-    handleStartFill(message.modelId, message.resumeProfile, {
+    handleStartFill(message.modelId, message.markdown, {
         fillMode: message.fillMode,
         scope: message.scope,
       })
@@ -157,240 +138,100 @@
     }
   });
 
-  async function handleStartFill(modelId, resumeProfile, request = {}) {
-    if (isWorking) {
-      return { success: false, message: "正在执行中，请稍后再试" };
-    }
-
+  async function handleStartFill(modelId, markdown, request = {}) {
+    if (isWorking) return { success: false, message: "正在执行中，请稍后再试" };
     isWorking = true;
-
     try {
-      if (!resumeProfile || typeof resumeProfile !== "object") {
-        throw new Error("标准简历为空：请先在侧边栏填写或导入标准简历");
-      }
-
-      const fillMode = request?.fillMode === "incremental" ? "incremental" : "overwrite";
-      const scope = request?.scope === "selection" ? "selection" : "page";
+      formPlan.buildPayload([], markdown);
+      const fillMode = request.fillMode === "incremental" ? "incremental" : "overwrite";
+      const scope = request.scope === "selection" ? "selection" : "page";
       let selectionRect = null;
-
       if (scope === "selection") {
-        sendLog("info", "已进入选区模式：请在页面上拖拽框选要填写的区域。");
+        sendLog("info", "请在页面上拖拽框选要填写的区域。");
         selectionRect = await requestSelectionRect();
-        if (!selectionRect) {
-          return {
-            success: false,
-            canceled: true,
-            message: "已取消选区填入",
-          };
-        }
-        sendLog(
-          "info",
-          `选区已确认：left=${Math.round(selectionRect.left)} top=${Math.round(
-            selectionRect.top
-          )} width=${Math.round(selectionRect.width)} height=${Math.round(selectionRect.height)}`
-        );
-      }
-
-      if (scope === "page") {
-        sendLog("info", "正在探索页面上的可展开区块...");
-        await triggerExpandableSections(resumeProfile);
-      }
-
-      sendLog(
-        "info",
-        scope === "selection" ? "开始扫描选区内表单字段..." : "开始扫描当前页面表单字段..."
-      );
-      const scan = scanFields({ scope, selectionRect });
-
-      lastFieldCount = scan.fields.length;
-      lastMappedCount = 0;
-      lastFilledCount = 0;
-
-      fieldRuntimeMap.clear();
-      for (const runtime of scan.runtime) {
-        fieldRuntimeMap.set(runtime.fieldId, runtime);
-      }
-
-      for (const field of scan.fields) {
-        sendLog("info", diagnostics.formatFieldSummary(field));
-      }
-
-      sendStats(lastFieldCount, 0, 0);
-
-      if (lastFieldCount === 0) {
-        return {
-          success: false,
-          message:
-            scope === "selection"
-              ? "选区内未识别到可填写字段，请重新框选后再试"
-              : "未识别到可填写字段，请确认当前页面包含表单",
-        };
-      }
-
-      const cacheSignature = createMappingCacheSignature(scan.fields);
-      const cacheKey = createMappingCacheKeyFromSignature(cacheSignature);
-      let mappings = null;
-      let cacheHit = false;
-
-      const cacheLookup = await loadMappingCacheEntry(cacheKey, {
-        host: location.host,
-        path: location.pathname,
-        signature: cacheSignature,
-      });
-      const cachedEntry = cacheLookup.entry;
-      if (cachedEntry?.mappings?.length) {
-        mappings = normalizeMappings(cachedEntry.mappings, scan.fields);
-        cacheHit = true;
-        sendLog("info", "已命中本地字段映射缓存，跳过模型调用。");
+        if (!selectionRect) return { success: false, canceled: true, message: "已取消选区填入" };
       } else {
-        sendLog("info", `[缓存] 未命中 reason="${cacheLookup.reason || "未知原因"}"`);
-        sendLog(
-          "info",
-          `已识别 ${lastFieldCount} 个字段，正在调用 AI 建立字段映射...`
-        );
-
-        const promptPayload = buildFieldMappingPayload(scan.fields, resumeProfile);
-        const aiText = await aiClient.callAI(
-          modelId,
-          JSON.stringify(promptPayload),
-          "field_mapping"
-        );
-        const parsed = parseJsonFromAiText(aiText);
-        mappings = normalizeMappings(parsed?.mappings, scan.fields);
-
-        await saveMappingCacheEntry(cacheKey, {
-          updatedAt: Date.now(),
-          mappings,
-          host: location.host,
-          path: location.pathname,
-          signature: cacheSignature,
-        });
-
-        sendLog("success", "字段映射已生成，并已写入本地缓存。");
+        sendLog("info", "正在展开已有的折叠区块…");
+        await triggerExpandableSections();
       }
-
-      const mappingById = new Map();
-      for (const mapping of mappings || []) {
-        if (!mapping?.fieldId) continue;
-        mappingById.set(String(mapping.fieldId), mapping);
-      }
-
-      for (const field of scan.fields) {
-        const mapping = mappingById.get(field.fieldId) || {
-          fieldId: field.fieldId,
-          resumePath: "",
-          reason: "未返回映射结果",
-          transform: { type: "none" },
-        };
-        const level = mapping.resumePath ? "info" : "warning";
-        sendLog(
-          level,
-          diagnostics.formatMappingSummary(field, mapping, {
-            source: cacheHit ? "cache" : "ai",
-          })
-        );
-      }
-
-      lastMappedCount = Array.from(mappingById.values()).filter((item) =>
-        Boolean(String(item.resumePath || "").trim())
-      ).length;
-
-      sendStats(lastFieldCount, lastMappedCount, 0);
-      sendLog(
-        "info",
-        fillMode === "incremental"
-          ? "开始根据映射结果执行增量填充..."
-          : "开始根据映射结果执行本地填充..."
-      );
-
-      let filledCount = 0;
-
-      for (const field of scan.fields) {
-        const mapping = mappingById.get(field.fieldId);
-        if (!mapping?.resumePath) {
-          sendLog(
-            "warning",
-            diagnostics.formatSkipSummary(
-              field,
-              mapping,
-              "AI 未匹配到可用的标准简历字段",
-              "",
-              ""
-            )
-          );
-          continue;
+      const scan = scanFields({ scope, selectionRect });
+      lastFieldCount = scan.fields.length; lastMappedCount = 0; lastFilledCount = 0;
+      fieldRuntimeMap.clear();
+      for (const runtime of scan.runtime) fieldRuntimeMap.set(runtime.fieldId, runtime);
+      sendStats(lastFieldCount, 0, 0);
+      if (!lastFieldCount) return { success: false, message: "未识别到可填写字段，请确认页面或选区" };
+      const report = [];
+      const fields = scan.fields.filter((field) => {
+        if (fillMode === "incremental" && hasExistingFieldValue(fieldRuntimeMap.get(field.fieldId))) {
+          report.push({ fieldId: field.fieldId, label: field.label, sectionLabel: field.sectionLabel, status: "skipped", reason: "已有内容，增量模式不覆盖" });
+          return false;
         }
-
-        const runtime = fieldRuntimeMap.get(field.fieldId);
-        if (fillMode === "incremental" && hasExistingFieldValue(runtime)) {
-          sendLog(
-            "warning",
-            diagnostics.formatSkipSummary(
-              field,
-              mapping,
-              "字段已有内容，增量模式下不覆盖",
-              "",
-              ""
-            )
-          );
-          continue;
-        }
-
-        const rawValue = schema.getValueByPath(resumeProfile, mapping.resumePath);
-        const finalValue = deriveFillValue(rawValue, mapping.transform, runtime);
-
-        sendLog(
-          "info",
-          diagnostics.formatValueSummary(field, mapping, rawValue, finalValue)
-        );
-
-        if (!hasMeaningfulFillValue(finalValue)) {
-          sendLog(
-            "warning",
-            diagnostics.formatSkipSummary(
-              field,
-              mapping,
-              "标准简历中没有可填写的值，或转换后为空",
-              rawValue,
-              finalValue
-            )
-          );
-          continue;
-        }
-
-        const fillResult = await fillOne(runtime, finalValue, { overwrite: fillMode !== "incremental" });
-        sendLog(
-          fillResult.filled ? "success" : "warning",
-          diagnostics.formatFillSummary({
-            field,
-            mapping,
-            rawValue,
-            finalValue,
-            fillResult,
-          })
-        );
-        if (fillResult.filled) {
-          filledCount += 1;
+        return true;
+      });
+      if (fields.length) {
+        sendLog("info", `已识别 ${lastFieldCount} 个字段，正在根据 Markdown 为 ${fields.length} 个字段生成答案…`);
+        const payload = formPlan.buildPayload(fields, markdown, { url: sanitizePageUrl(location.href), title: String(document.title || "").slice(0, 120) });
+        const aiText = await aiClient.callAI(modelId, JSON.stringify(payload), "field_values");
+        const parsed = formPlan.parseJsonFromAiText(aiText);
+        if (!Array.isArray(parsed?.answers)) throw new Error("AI 返回格式不正确：缺少 answers 数组");
+        const answers = formPlan.normalizeAnswers(parsed.answers, fields, markdown);
+        lastMappedCount = answers.filter((answer) => answer.source !== "missing").length;
+        sendStats(lastFieldCount, lastMappedCount, 0);
+        for (let index = 0; index < fields.length; index++) {
+          const field = fields[index], answer = answers[index];
+          const runtime = fieldRuntimeMap.get(field.fieldId);
+          const item = { ...answer, label: field.label, sectionLabel: field.sectionLabel, status: "missing" };
+          // Recheck after the network round trip: never overwrite user edits in incremental mode.
+          if (fillMode === "incremental" && hasExistingFieldValue(runtime)) {
+            item.status = "skipped"; item.value = null; item.evidence = []; item.reason = "已有内容，增量模式不覆盖";
+          } else if (answer.source !== "missing") {
+            const invalid = validateRuntimeAnswer(runtime, answer.value);
+            if (invalid) { item.status = "missing"; item.reason = invalid; }
+            else {
+              try {
+                const result = await fillOne(runtime, answer.value, { overwrite: fillMode !== "incremental" });
+                item.status = result.filled ? (answer.source === "generated" ? "generated" : "filled") : "failed";
+                if (!result.filled) item.reason = result.message || "控件填写失败";
+                if (result.filled) lastFilledCount++;
+              } catch (_) { item.status = "failed"; item.reason = "控件填写失败，请手动检查"; }
+            }
+          }
+          report.push(item);
+          // Do not put values, evidence, or AI-generated reasons into persistent diagnostics.
+          sendLog(item.status === "missing" || item.status === "failed" ? "warning" : "info", `[填写结果] fieldId=${field.fieldId} status=${item.status} source=${answer.source}`);
         }
       }
-
-      lastFilledCount = filledCount;
+      report.sort((left, right) => scan.fields.findIndex((f) => f.fieldId === left.fieldId) - scan.fields.findIndex((f) => f.fieldId === right.fieldId));
       sendStats(lastFieldCount, lastMappedCount, lastFilledCount);
-      sendLog(
-        "success",
-        `填充完成：映射 ${lastMappedCount}/${lastFieldCount} 个字段，成功填充 ${lastFilledCount} 个。请检查后手动提交。`
-      );
+      sendLog("success", `填充完成：成功 ${lastFilledCount}/${lastFieldCount}，待补充 ${report.filter((item) => item.status === "missing").length}。请检查后手动提交。`);
+      return { success: true, fieldCount: lastFieldCount, mappedCount: lastMappedCount, filledCount: lastFilledCount, cacheHit: false, report };
+    } catch (error) {
+      sendLog("error", error.message || "填充失败");
+      return { success: false, message: error.message || "填充失败" };
+    } finally { isWorking = false; }
+  }
 
-      return {
-        success: true,
-        fieldCount: lastFieldCount,
-        mappedCount: lastMappedCount,
-        filledCount: lastFilledCount,
-        cacheHit,
-      };
-    } finally {
-      isWorking = false;
+  function validateRuntimeAnswer(runtime, value) {
+    if (!runtime) return "字段已不存在";
+    if (runtime.el?.isConnected === false) return "页面字段已变化，请重新扫描";
+    if (runtime.el?.disabled || runtime.el?.getAttribute("aria-disabled") === "true") return "字段已禁用";
+    if (["radio_group", "checkbox_group", "select"].includes(runtime.kind)) {
+      const options = runtime.kind === "select"
+        ? Array.from(runtime.el.options || []).map((el) => ({ el, label: String(el.textContent || "").trim() }))
+        : runtime.options;
+      const desired = Array.isArray(value) ? value : [value];
+      if (desired.some((item) => !options?.some((option) =>
+        String(option.label || option.value || "").trim() === String(item) &&
+        option.el?.isConnected !== false && !option.el?.disabled))) return "选项已变化或不可选，请重新扫描";
     }
+    if (["text", "textarea"].includes(runtime.kind) && runtime.el?.cloneNode) {
+      const probe = runtime.el.cloneNode(false);
+      probe.removeAttribute("id"); probe.removeAttribute("name"); probe.removeAttribute("readonly");
+      probe.value = String(value);
+      if (probe.value === "" && String(value) !== "") return "填写值不符合控件格式";
+      if (probe.checkValidity && !probe.checkValidity()) return "填写值不符合页面的格式、范围或选项限制，请检查";
+    }
+    return "";
   }
 
   function normalizeDeepScanText(value) {
@@ -486,33 +327,7 @@
     return hasMoreText && hasCollapsedState;
   }
 
-  function hasSectionContent(profile, sectionKey) {
-    const section = profile?.[sectionKey];
-    if (!section) return false;
-    if (Array.isArray(section)) {
-      return section.some((item) =>
-        item && typeof item === "object"
-          ? Object.values(item).some((value) => String(value || "").trim())
-          : Boolean(String(item || "").trim())
-      );
-    }
-    if (typeof section === "object") {
-      return Object.values(section).some((value) => String(value || "").trim());
-    }
-    return Boolean(String(section).trim());
-  }
-
-  function deepScanButtonMatchesProfile(el, resumeProfile) {
-    if (!resumeProfile) return true;
-    const text = getDeepScanText(el);
-    const matchedSections = DEEP_SCAN_SECTION_MAP.filter((entry) =>
-      entry.patterns.some((pattern) => text.includes(normalizeDeepScanText(pattern)))
-    );
-    if (matchedSections.length === 0) return true;
-    return matchedSections.some((entry) => hasSectionContent(resumeProfile, entry.sectionKey));
-  }
-
-  function findDeepScanButtons(clickedElements, resumeProfile) {
+  function findDeepScanButtons(clickedElements) {
     const selectors = [
       'button:not([type="submit"])',
       '[role="button"]',
@@ -521,7 +336,7 @@
     ];
     return Array.from(document.querySelectorAll(selectors.join(","))).filter((el) => {
       if (!isVisible(el) || clickedElements.has(el)) return false;
-      return isDeepScanExpandTrigger(el) && deepScanButtonMatchesProfile(el, resumeProfile);
+      return isDeepScanExpandTrigger(el);
     });
   }
 
@@ -563,7 +378,7 @@
     });
   }
 
-  async function triggerExpandableSections(resumeProfile) {
+  async function triggerExpandableSections() {
     const clickedElements = new WeakSet();
     let totalClicked = 0;
 
@@ -572,7 +387,7 @@
       round < DEEP_SCAN_MAX_ROUNDS && totalClicked < DEEP_SCAN_MAX_CLICKS;
       round += 1
     ) {
-      const buttons = findDeepScanButtons(clickedElements, resumeProfile);
+      const buttons = findDeepScanButtons(clickedElements);
       if (buttons.length === 0) break;
 
       sendLog("info", `深度扫描第 ${round + 1} 轮：发现 ${buttons.length} 个可展开区块`);
@@ -596,36 +411,6 @@
     return totalClicked;
   }
 
-  function buildFieldMappingPayload(fields, resumeProfile) {
-    const resumeFields = schema
-      .getCatalogWithValues(resumeProfile)
-      .filter((field) => field.hasValue)
-      .map((field) => ({
-        path: field.path,
-        label: field.label,
-        sectionLabel: field.sectionLabel,
-        itemLabel: field.itemLabel || "",
-        input: field.input,
-        hasValue: field.hasValue,
-        valuePreview: field.valuePreview,
-        options: field.options || [],
-      }));
-
-    return {
-      url: sanitizePageUrl(location.href),
-      title: String(document.title || "").slice(0, 120),
-      allowedTransforms: [
-        { type: "none" },
-        { type: "date_part", part: "year|month|day" },
-        { type: "phone_part", part: "countryCode|nationalNumber" },
-        { type: "boolean_choice", trueValue: "text", falseValue: "text" },
-        { type: "join", separator: ", " },
-      ],
-      fields,
-      resumeFields,
-    };
-  }
-
   function sanitizePageUrl(value) {
     const rawUrl = String(value || "");
     if (typeof URL !== "function") {
@@ -642,107 +427,6 @@
     }
   }
 
-  function normalizeMappings(rawMappings, fields) {
-    const validFieldIds = new Set(fields.map((field) => String(field.fieldId)));
-    const validResumePaths = new Set(
-      schema.getFieldCatalog({ mode: "max" }).map((field) => field.path)
-    );
-    const normalized = [];
-
-    for (const item of Array.isArray(rawMappings) ? rawMappings : []) {
-      const fieldId = String(item?.fieldId || "").trim();
-      if (!fieldId || !validFieldIds.has(fieldId)) continue;
-
-      const resumePath = String(item?.resumePath || "").trim();
-      normalized.push({
-        fieldId,
-        resumePath: resumePath && validResumePaths.has(resumePath) ? resumePath : "",
-        reason: String(item?.reason || "").trim().slice(0, 240),
-        transform: normalizeTransform(item?.transform),
-      });
-    }
-
-    return normalized;
-  }
-
-  function normalizeTransform(transform) {
-    if (!transform || typeof transform !== "object") {
-      return { type: "none" };
-    }
-
-    const type = String(transform.type || "none").trim();
-
-    if (type === "date_part") {
-      const part = ["year", "month", "day"].includes(transform.part)
-        ? transform.part
-        : "year";
-      return { type, part };
-    }
-
-    if (type === "phone_part") {
-      const part =
-        transform.part === "countryCode" ? "countryCode" : "nationalNumber";
-      return { type, part };
-    }
-
-    if (type === "boolean_choice") {
-      return {
-        type,
-        trueValue: String(transform.trueValue ?? "Yes"),
-        falseValue: String(transform.falseValue ?? "No"),
-      };
-    }
-
-    if (type === "join") {
-      return {
-        type,
-        separator: String(transform.separator || ", "),
-      };
-    }
-
-    return { type: "none" };
-  }
-
-  function deriveFillValue(rawValue, transform, runtime) {
-    if (!hasSourceValue(rawValue)) {
-      return "";
-    }
-
-    const normalizedTransform = normalizeTransform(transform);
-
-    if (normalizedTransform.type === "date_part") {
-      return getDatePart(rawValue, normalizedTransform.part);
-    }
-
-    if (normalizedTransform.type === "phone_part") {
-      return getPhonePart(rawValue, normalizedTransform.part);
-    }
-
-    if (normalizedTransform.type === "boolean_choice") {
-      return isAffirmative(rawValue)
-        ? normalizedTransform.trueValue
-        : normalizedTransform.falseValue;
-    }
-
-    if (normalizedTransform.type === "join") {
-      return joinValue(rawValue, normalizedTransform.separator);
-    }
-
-    if (runtime?.kind === "checkbox_group") {
-      return normalizeCheckboxCandidates(rawValue);
-    }
-
-    return rawValue;
-  }
-
-  function hasSourceValue(value) {
-    if (Array.isArray(value)) {
-      return value.some((item) => String(item || "").trim());
-    }
-
-    return String(value ?? "").trim().length > 0;
-  }
-
   function normalizeCheckboxCandidates(value) {
     if (Array.isArray(value)) {
       return value.map((item) => String(item || "").trim()).filter(Boolean);
@@ -755,46 +439,6 @@
       .split(/[\n,，;/]/g)
       .map((item) => item.trim())
       .filter(Boolean);
-  }
-
-  function hasMeaningfulFillValue(value) {
-    if (Array.isArray(value)) {
-      return value.some((item) => String(item || "").trim());
-    }
-
-    return String(value ?? "").trim().length > 0;
-  }
-
-  function getDatePart(value, part) {
-    const text = String(value || "").trim();
-    if (!text) return "";
-
-    const match = text.match(/^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?/);
-    if (!match) return "";
-
-    if (part === "year") return match[1] || "";
-    if (part === "month") return match[2] ? match[2].padStart(2, "0") : "";
-    return match[3] ? match[3].padStart(2, "0") : "";
-  }
-
-  function getPhonePart(value, part) {
-    const text = String(value || "").trim();
-    if (!text) return "";
-
-    if (part === "countryCode") {
-      const match = text.match(/^\+?\d{1,4}/);
-      return match ? match[0] : "";
-    }
-
-    return text.replace(/^\+?\d{1,4}[\s-]*/, "").trim();
-  }
-
-  function joinValue(value, separator) {
-    if (Array.isArray(value)) {
-      return value.map((item) => String(item || "").trim()).filter(Boolean).join(separator);
-    }
-
-    return String(value || "").trim();
   }
 
   async function requestSelectionRect() {
@@ -948,6 +592,10 @@
       });
       const commonMeta = {
         required: Boolean(el.required || el.getAttribute("aria-required") === "true"),
+        maxLength: el.maxLength >= 0 ? el.maxLength : null,
+        minLength: el.minLength > 0 ? el.minLength : null,
+        min: el.getAttribute("min"), max: el.getAttribute("max"),
+        step: el.getAttribute("step"), pattern: el.getAttribute("pattern"),
         context: semanticMeta.context,
         sectionKey: semanticMeta.sectionKey,
         sectionLabel: semanticMeta.sectionLabel,
@@ -959,8 +607,7 @@
         const fieldId = `f_${++idSeq}`;
         const options = Array.from(el.options || [])
           .map((opt) => String(opt.textContent || "").trim())
-          .filter(Boolean)
-          .slice(0, 60);
+          .filter(Boolean);
 
         fields.push({
           fieldId,
@@ -1101,8 +748,7 @@
           label: getOptionLabel(input),
           value: input.value || "",
         }))
-        .filter((item) => item.label || item.value)
-        .slice(0, 80);
+        .filter((item) => item.label || item.value);
 
       fields.push({
         fieldId,
@@ -1138,8 +784,7 @@
           label: getOptionLabel(input),
           value: input.value || "",
         }))
-        .filter((item) => item.label || item.value)
-        .slice(0, 80);
+        .filter((item) => item.label || item.value);
 
       fields.push({
         fieldId,
@@ -1670,7 +1315,7 @@
 
       let any = false;
       for (const option of runtime.options || []) {
-        const shouldCheck = matchesAnyCandidate(option.label || option.value, desired);
+        const shouldCheck = desired.includes(String(option.label || option.value).trim());
         const shouldBeChecked = overwrite
           ? shouldCheck
           : Boolean(option.el?.checked) || shouldCheck;
@@ -1684,7 +1329,7 @@
     }
 
     if (runtime.kind === "radio_group") {
-      const best = pickBestOption(runtime.options || [], value);
+      const best = (runtime.options || []).find((option) => String(option.label || option.value).trim() === String(value));
       if (!best) {
         return { filled: false, message: "未找到可匹配的单选项" };
       }
@@ -2155,7 +1800,7 @@
       }))
       .filter((option) => option.label);
 
-    const best = pickBestOption(options, desired);
+    const best = options.find((option) => option.label === String(desired));
     if (!best) return false;
 
     selectEl.value = best.value;
@@ -2266,284 +1911,8 @@
       .replace(/[.,，/\\\-_:：;+]/g, "");
   }
 
-  function isAffirmative(value) {
-    const normalized = normalizeForMatch(value);
-    return MATCH_ALIAS_GROUPS.find((group) => group.key === "yes")?.values.includes(
-      normalized
-    );
-  }
-
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function parseJsonFromAiText(text) {
-    const trimmed = String(text || "").trim();
-    if (!trimmed) throw new Error("AI 返回为空");
-
-    const direct = tryParseJson(trimmed);
-    if (direct.ok) return direct.value;
-
-    const noFences = trimmed
-      .replace(/```json\s*/gi, "")
-      .replace(/```\s*/g, "")
-      .trim();
-
-    const noFenceParsed = tryParseJson(noFences);
-    if (noFenceParsed.ok) return noFenceParsed.value;
-
-    const extracted = extractLikelyJson(noFences);
-    const extractedParsed = tryParseJson(extracted);
-    if (extractedParsed.ok) return extractedParsed.value;
-
-    throw new Error("无法解析 AI 返回的 JSON");
-  }
-
-  function tryParseJson(text) {
-    try {
-      return { ok: true, value: JSON.parse(text) };
-    } catch (_) {
-      return { ok: false };
-    }
-  }
-
-  function extractLikelyJson(text) {
-    const firstObj = text.indexOf("{");
-    const lastObj = text.lastIndexOf("}");
-    const firstArr = text.indexOf("[");
-    const lastArr = text.lastIndexOf("]");
-
-    const objCandidate =
-      firstObj !== -1 && lastObj !== -1 && lastObj > firstObj
-        ? text.slice(firstObj, lastObj + 1)
-        : null;
-    const arrCandidate =
-      firstArr !== -1 && lastArr !== -1 && lastArr > firstArr
-        ? text.slice(firstArr, lastArr + 1)
-        : null;
-
-    if (objCandidate && arrCandidate) {
-      return firstObj < firstArr ? objCandidate : arrCandidate;
-    }
-
-    return objCandidate || arrCandidate || text;
-  }
-
-  function createMappingCacheSignature(fields) {
-    return fields.map((field, index) =>
-      createStableCacheFieldSignature(field, index)
-    );
-  }
-
-  function createMappingCacheKey(fields) {
-    return createMappingCacheKeyFromSignature(createMappingCacheSignature(fields));
-  }
-
-  function createMappingCacheKeyFromSignature(signature) {
-    const base = `${location.origin}${location.pathname}::${JSON.stringify(signature)}`;
-    return `${location.host}:${hashString(base)}`;
-  }
-
-  function createStableCacheFieldSignature(field, index = 0) {
-    return {
-      index,
-      kind: field.kind,
-      inputType: field.inputType || "",
-      required: Boolean(field.required),
-      sectionKey: normalizeCacheText(field.sectionKey || ""),
-      sectionLabel: normalizeCacheText(field.sectionLabel || ""),
-      label: normalizeCacheText(field.label || ""),
-      placeholder: normalizeCacheText(field.placeholder || ""),
-      name: normalizeCacheText(field.name || ""),
-      id: normalizeCacheText(field.id || ""),
-      options: Array.isArray(field.options)
-        ? field.options.map((item) => normalizeCacheText(item)).filter(Boolean).slice(0, 8)
-        : [],
-    };
-  }
-
-  function normalizeCacheText(value) {
-    let text = String(value || "").trim();
-    if (!text) return "";
-
-    text = text
-      .replace(/\s+/g, " ")
-      .replace(/[＊*]+\s*/g, "*")
-      .replace(/^(请填写|请选择|请输入|请完整填写)/g, "")
-      .replace(/(请填写|请选择|请输入)/g, "")
-      .replace(/[*:：]+$/g, "")
-      .trim();
-
-    if (!text) return "";
-
-    const starIndex = text.indexOf("*");
-    if (starIndex >= 0) {
-      text = text.slice(0, starIndex).trim();
-    }
-
-    const stablePrefixMatch = text.match(/^([\u4e00-\u9fa5A-Za-z]+(?:名称|时间|日期|学历|学位|专业|部门|职位|城市|邮箱|手机|电话|描述|链接|角色|学校|证书|账号|网址))/);
-    if (stablePrefixMatch) {
-      return stablePrefixMatch[1];
-    }
-
-    if (/^(全灵|实习|本科|硕士|博士|男|女|是|否|\d{4}[-/]\d{2}(?:[-/]\d{2})?)$/.test(text)) {
-      return "";
-    }
-
-    return text;
-  }
-
-  function hashString(text) {
-    let hash = 5381;
-    for (let index = 0; index < text.length; index += 1) {
-      hash = (hash * 33) ^ text.charCodeAt(index);
-    }
-    return (hash >>> 0).toString(16);
-  }
-
-  function describeMappingCacheLookup(cache, cacheKey, meta = {}) {
-    const normalizedCache = cache && typeof cache === "object" ? cache : {};
-    const keys = Object.keys(normalizedCache);
-    const entry = normalizedCache[cacheKey] || null;
-    const shortKey = String(cacheKey || "").split(":").pop() || "(empty)";
-
-    if (entry) {
-      return {
-        entry,
-        hit: true,
-        reason: `命中 key=${shortKey} total=${keys.length}`,
-      };
-    }
-
-    if (keys.length === 0) {
-      return {
-        entry: null,
-        hit: false,
-        reason: `缓存为空 key=${shortKey}`,
-      };
-    }
-
-    const samePageEntries = Object.entries(normalizedCache)
-      .filter(([, item]) => item?.host === meta.host && item?.path === meta.path)
-      .sort((left, right) => Number(right[1]?.updatedAt || 0) - Number(left[1]?.updatedAt || 0));
-
-    if (samePageEntries.length === 0) {
-      return {
-        entry: null,
-        hit: false,
-        reason: `缓存中没有当前页面记录 key=${shortKey} total=${keys.length}`,
-      };
-    }
-
-    const latestSamePage = samePageEntries[0]?.[1] || null;
-    const difference = summarizeCacheSignatureDifference(
-      meta.signature,
-      latestSamePage?.signature
-    );
-
-    return {
-      entry: null,
-      hit: false,
-      reason: `同页面已有${samePageEntries.length}条缓存，但当前字段签名已变化 key=${shortKey} ${difference}`,
-    };
-  }
-
-  function summarizeCacheSignatureDifference(currentSignature, previousSignature) {
-    if (!Array.isArray(currentSignature) || currentSignature.length === 0) {
-      return "当前扫描签名为空";
-    }
-
-    if (!Array.isArray(previousSignature) || previousSignature.length === 0) {
-      return "历史缓存缺少签名明细";
-    }
-
-    if (currentSignature.length !== previousSignature.length) {
-      return `字段数量 ${previousSignature.length} -> ${currentSignature.length}`;
-    }
-
-    const diffs = [];
-    for (let index = 0; index < currentSignature.length; index += 1) {
-      const current = currentSignature[index];
-      const previous = previousSignature[index];
-      if (JSON.stringify(current) === JSON.stringify(previous)) {
-        continue;
-      }
-      diffs.push(describeCacheFieldDifference(previous, current, index));
-    }
-
-    if (diffs.length === 0) {
-      return "签名一致，但缓存条目不存在";
-    }
-
-    return `差异字段 ${diffs.length} 个，示例：${diffs.slice(0, 3).join("；")}`;
-  }
-
-  function describeCacheFieldDifference(previous, current, index) {
-    const changes = [];
-
-    if ((previous?.kind || "") !== (current?.kind || "")) {
-      changes.push(`kind ${previous?.kind || "(empty)"} -> ${current?.kind || "(empty)"}`);
-    }
-    if ((previous?.inputType || "") !== (current?.inputType || "")) {
-      changes.push(
-        `inputType ${previous?.inputType || "(empty)"} -> ${current?.inputType || "(empty)"}`
-      );
-    }
-    if ((previous?.sectionLabel || "") !== (current?.sectionLabel || "")) {
-      changes.push(
-        `section ${previous?.sectionLabel || "(empty)"} -> ${current?.sectionLabel || "(empty)"}`
-      );
-    }
-    if ((previous?.label || "") !== (current?.label || "")) {
-      changes.push(`label ${previous?.label || "(empty)"} -> ${current?.label || "(empty)"}`);
-    }
-    if ((previous?.placeholder || "") !== (current?.placeholder || "")) {
-      changes.push(
-        `placeholder ${previous?.placeholder || "(empty)"} -> ${current?.placeholder || "(empty)"}`
-      );
-    }
-    if ((previous?.name || "") !== (current?.name || "")) {
-      changes.push(`name ${previous?.name || "(empty)"} -> ${current?.name || "(empty)"}`);
-    }
-    if ((previous?.id || "") !== (current?.id || "")) {
-      changes.push(`id ${previous?.id || "(empty)"} -> ${current?.id || "(empty)"}`);
-    }
-
-    const previousOptions = JSON.stringify(previous?.options || []);
-    const currentOptions = JSON.stringify(current?.options || []);
-    if (previousOptions !== currentOptions) {
-      changes.push(`options ${previousOptions} -> ${currentOptions}`);
-    }
-
-    return `#${index + 1} ${changes[0] || "结构变化"}`;
-  }
-
-  async function loadMappingCacheEntry(cacheKey, meta = {}) {
-    const data = await chrome.storage.local.get([MAPPING_CACHE_KEY]);
-    const cache = data[MAPPING_CACHE_KEY];
-    return describeMappingCacheLookup(cache, cacheKey, meta);
-  }
-
-  async function saveMappingCacheEntry(cacheKey, entry) {
-    const data = await chrome.storage.local.get([MAPPING_CACHE_KEY]);
-    const cache = data[MAPPING_CACHE_KEY] && typeof data[MAPPING_CACHE_KEY] === "object"
-      ? data[MAPPING_CACHE_KEY]
-      : {};
-
-    cache[cacheKey] = entry;
-
-    const keys = Object.keys(cache).sort((left, right) => {
-      const leftTime = Number(cache[left]?.updatedAt || 0);
-      const rightTime = Number(cache[right]?.updatedAt || 0);
-      return rightTime - leftTime;
-    });
-
-    const nextCache = {};
-    keys.slice(0, 50).forEach((key) => {
-      nextCache[key] = cache[key];
-    });
-
-    await chrome.storage.local.set({ [MAPPING_CACHE_KEY]: nextCache });
   }
 
   function sendLog(level, text) {

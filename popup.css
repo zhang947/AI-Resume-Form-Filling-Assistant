@@ -1201,3 +1201,12 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
+
+.markdown-editor { min-height: 360px; resize: vertical; font-family: Consolas, monospace; line-height: 1.7; white-space: pre-wrap; }
+.markdown-page { max-width: 1100px; margin: 0 auto; }
+.markdown-page .markdown-editor { min-height: 60vh; }
+.fill-report { max-height: 380px; overflow: auto; margin: 12px 0; }
+.fill-report-item { padding: 10px; border-bottom: 1px solid var(--border-color, #ddd); }
+.fill-report-item summary { cursor: pointer; font-size: 13px; }
+.fill-report-item p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
+#documentStatus[data-type="error"], #documentStatus[data-type="warning"] { color: #a34c16; }

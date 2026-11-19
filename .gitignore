@@ -41,3 +41,7 @@ debug-logs/
 
 # Local snapshots / external test packages
 external-test-package-*/
+
+# Isolated browser smoke-test profiles and diagnostics
+output/markdown-smoke/
+output/test-results.txt

@@ -117,3 +117,19 @@ test("only HTTPS and local development API URLs are accepted", () => {
     /HTTPS/
   );
 });
+
+test("official DeepSeek configuration migrates display names and legacy chat ids", async () => {
+  const storage = loadModelStorage();
+  assert.equal(storage.DEFAULT_MODEL.model, "deepseek-flash");
+  for (const model of ["DeepSeek", " deepseek-chat ", "deepseek-v4-pro"]) {
+    const fake = createStorage({ local: {
+      aiModels: [],
+      builtinModelOverride: { model },
+    } });
+    const config = await storage.getModelConfig("builtin-deepseek", fake.storage);
+    assert.equal(config.model, model === "deepseek-v4-pro" ? model : "deepseek-flash");
+  }
+  assert.equal(storage.normalizeModel({
+    id: "proxy", baseUrl: "https://example.com/v1", model: "DeepSeek",
+  }).model, "DeepSeek");
+});

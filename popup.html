@@ -46,12 +46,12 @@
       <main class="app-content">
         <div class="tabs" id="tabs">
           <button class="tab active" data-tab="fill">自动填充</button>
-          <button class="tab" data-tab="resume">标准简历</button>
+          <button class="tab" data-tab="resume">个人资料</button>
         </div>
 
         <section class="tab-panel active" id="tab-fill">
           <div class="template-bar">
-            <label for="fillTemplateSelect">简历模板（本次填充使用）</label>
+            <label for="fillTemplateSelect">资料（本次填充使用）</label>
             <select id="fillTemplateSelect" class="template-select"></select>
           </div>
 
@@ -62,7 +62,7 @@
             </div>
             <div class="stat-card">
               <span class="stat-value" id="mappedCount">0</span>
-              <span class="stat-label">已映射</span>
+              <span class="stat-label">已生成答案</span>
             </div>
             <div class="stat-card">
               <span class="stat-value" id="filledCount">0</span>
@@ -70,6 +70,8 @@
             </div>
           </div>
 
+          <div id="fillReport" class="fill-report" aria-live="polite" hidden></div>
+          <p class="tip">有待补充项目时，请在“个人资料”补充并保存，再点击“增量填入”。</p>
           <div class="steps-area">
             <button class="btn btn-primary btn-lg" id="startFillBtn">
               <svg
@@ -95,7 +97,7 @@
               <span id="startSelectionFillBtnText">选区填入</span>
             </button>
             <button class="btn btn-outline btn-lg" id="clearMappingCacheBtn">
-              清理映射缓存
+              清理旧版缓存
             </button>
             <div class="tip" id="fillTip" hidden></div>
           </div>
@@ -104,90 +106,45 @@
         <section class="tab-panel" id="tab-resume">
           <div class="template-manager">
             <div class="section-header section-header-normal">
-              <span>简历模板</span>
+              <span>资料</span>
             </div>
             <select id="resumeTemplateSelect" class="template-select"></select>
             <div class="template-manager-row">
-              <button class="btn btn-outline btn-sm" id="newTemplateBtn" title="新建一个空白简历模板">新建</button>
+              <button class="btn btn-outline btn-sm" id="newTemplateBtn" title="新建一个空白资料">新建</button>
               <button class="btn btn-outline btn-sm" id="duplicateTemplateBtn" title="复制当前模板">复制</button>
               <button class="btn btn-outline btn-sm" id="renameTemplateBtn" title="重命名当前模板">重命名</button>
               <button class="btn btn-outline btn-sm" id="deleteTemplateBtn" title="删除当前模板">删除</button>
             </div>
             <div class="template-manager-row">
+              <button class="btn btn-outline btn-sm" id="exportMigrationBackupBtn">导出迁移前备份</button>
               <button class="btn btn-outline btn-sm" id="exportTemplatesBtn" title="导出全部模板为 JSON 备份">导出</button>
               <button class="btn btn-outline btn-sm" id="importTemplatesBtn" title="从 JSON 备份导入（覆盖当前模板）">导入</button>
             </div>
             <div class="template-manager-row">
-              <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前标准简历 JSON">导出当前简历</button>
-              <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入标准简历 JSON 到当前模板">导入当前简历</button>
+              <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前资料为 Markdown 文件">导出 .md</button>
+              <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入 Markdown、文本或旧版简历 JSON">导入 .md / 旧 JSON</button>
             </div>
             <input type="file" id="importTemplatesFile" accept="application/json" hidden />
-            <input type="file" id="importResumeJsonFile" accept="application/json" hidden />
+            <input type="file" id="importResumeJsonFile" accept=".md,.markdown,.txt,.json,text/markdown,text/plain,application/json" hidden />
             <div class="tip">
-              每个模板是一份独立的标准简历。基础信息相近时，可“复制当前”后只改侧重点（如测开 / 游戏开发 / 普通开发）。填充前在上方“自动填充”页切换模板即可。
+              每份资料独立保存 Markdown，支持任意内容；可复制后调整求职方向。全部资料用 JSON 备份，单份资料用 .md 导入导出。
             </div>
           </div>
 
           <div class="section-block">
-            <div class="section-header section-header-normal">
-              <span>简历配置</span>
+            <p class="tip" id="documentStatus" role="status">正在加载资料…</p>
+            <label for="markdownEditor">个人 Markdown 资料</label>
+            <p class="tip">任意章节和信息均可使用。描述题可根据经历生成；缺失事实与个人意愿会提示补充。填写时资料会发送至已配置的模型。</p>
+            <textarea id="markdownEditor" class="textarea markdown-editor" spellcheck="false" placeholder="# 个人资料&#10;&#10;在此记录基本信息、经历、偏好，以及其他任意信息。"></textarea>
+            <div class="action-row">
+              <button class="btn btn-primary" id="saveResumeBtn">保存资料</button>
+              <button class="btn btn-outline" id="reloadResumeBtn">重新加载</button>
+              <button class="btn btn-outline" id="insertOutlineBtn">插入参考章节</button>
+              <button class="btn btn-outline" id="uploadPdfBtn">追加 PDF 原文</button>
             </div>
-            <div class="tip">
-              简历字段较多，推荐在独立网页里编辑。新页面会复用当前扩展里的同一份标准简历数据。
-            </div>
-            <div class="resume-launch-card">
-              <div class="resume-launch-copy">
-                <div class="resume-launch-title">在宽页面里配置个人简历</div>
-                <div class="resume-launch-desc">
-                  更适合填写长文本、工作经历、教育经历和项目说明，保存后会立即同步到自动填充流程。
-                </div>
-              </div>
-              <button class="btn btn-primary" id="openResumeEditorBtn">打开简历配置页</button>
-            </div>
-            <div class="resume-summary-grid" id="resumeSummaryGrid"></div>
-          </div>
-
-          <div class="resume-sidepanel-legacy" hidden>
-            <div class="section-block">
-              <div class="section-header section-header-normal">
-                <span>标准化简历字段</span>
-                <div class="section-actions">
-                  <button class="btn-text" id="reloadResumeBtn">重新加载</button>
-                </div>
-              </div>
-              <div class="tip">
-                主流程以这份标准简历为准。请尽量填写完整，尤其是基本信息、工作经历、教育经历和求职偏好。
-              </div>
-              <div class="resume-editor-layout">
-                <aside class="resume-nav" id="resumeNav"></aside>
-                <div class="resume-form-host" id="resumeFormHost"></div>
-              </div>
-              <div class="action-row">
-                <button class="btn btn-primary" id="saveResumeBtn">保存标准简历</button>
-              </div>
-            </div>
-
-            <div class="section-block">
-              <div class="section-header section-header-normal">
-                <span>导入辅助（可选）</span>
-              </div>
-              <div class="tip">
-                你仍然可以粘贴原始简历文本或上传 PDF，用 AI 预填上面的标准字段；导入后请自行检查并保存。
-              </div>
-              <div class="form-group">
-                <label for="resumeImportText">原始简历文本</label>
-                <textarea
-                  id="resumeImportText"
-                  class="textarea"
-                  placeholder="粘贴原始简历文本，或上传 PDF 后自动填入这里。"
-                ></textarea>
-              </div>
-              <div class="action-row">
-                <button class="btn btn-primary" id="importResumeBtn">AI 导入到标准简历</button>
-                <button class="btn btn-outline" id="uploadPdfBtn">上传 PDF 并导入</button>
-              </div>
-              <input type="file" id="resumePdfFile" accept="application/pdf" hidden />
-            </div>
+            <input type="file" id="resumePdfFile" accept="application/pdf" hidden />
+            <div class="tip" id="resumeSummaryGrid"></div>
+            <button class="btn btn-outline" id="openResumeEditorBtn">打开宽页面编辑器</button>
           </div>
         </section>
 
@@ -206,7 +163,7 @@
             <div class="log-item log-info">
               <span class="log-time">--:--</span>
               <span class="log-msg">
-                先在“标准简历”里填写或导入资料，再到“自动填充”执行映射和填表。
+                先填写或导入 Markdown 资料，再到“自动填充”生成答案并填表。
               </span>
             </div>
           </div>
@@ -323,7 +280,7 @@
             </div>
             <div class="form-group">
               <label for="editModel">模型 ID</label>
-              <input type="text" id="editModel" placeholder="deepseek-chat" />
+              <input type="text" id="editModel" placeholder="deepseek-flash / deepseek-v4-pro" />
             </div>
             <div class="config-status" id="editStatus"></div>
           </div>
@@ -375,9 +332,8 @@
     <script src="libs/pdfjs/pdf.min.js"></script>
     <script src="shared/resume-schema.js"></script>
     <script src="shared/resume-storage.js"></script>
+    <script src="shared/document-editor.js"></script>
     <script src="shared/model-storage.js"></script>
-    <script src="shared/ai-client.js"></script>
-    <script src="shared/resume-prompts.js"></script>
     <script src="shared/log-export.js"></script>
     <script src="shared/log-visibility.js"></script>
     <script src="shared/content-bridge.js"></script>

@@ -17,7 +17,7 @@ function loadDeepScanHelpers() {
   const source = fs.readFileSync(path.join(__dirname, "../content.js"), "utf8");
   const constants = source.slice(
     source.indexOf("  const DEEP_SCAN_MAX_ROUNDS ="),
-    source.indexOf("\n\n  const fieldRuntimeMap")
+    source.indexOf("  const fieldRuntimeMap")
   );
   const snippet = `
     ${constants}
@@ -26,7 +26,7 @@ function loadDeepScanHelpers() {
     ${extractFunction(source, "  function getDeepScanText(el) {", "  function getDeepScanTargetElements(el) {")}
     ${extractFunction(source, "  function getDeepScanTargetElements(el) {", "  function hasHiddenDeepScanTarget(el) {")}
     ${extractFunction(source, "  function hasHiddenDeepScanTarget(el) {", "  function isDeepScanExpandTrigger(el) {")}
-    ${extractFunction(source, "  function isDeepScanExpandTrigger(el) {", "  function hasSectionContent(profile, sectionKey) {")}
+    ${extractFunction(source, "  function isDeepScanExpandTrigger(el) {", "  function findDeepScanButtons(clickedElements) {")}
     module.exports = { isDeepScanExpandTrigger };
   `;
   const context = { module: { exports: {} }, exports: {} };
