@@ -146,6 +146,8 @@
 
     if (action === "startFill") {
     handleStartFill(message.modelId, message.resumeProfile, {
+        fillMethod: message.fillMethod,
+        markdown: message.markdown,
         fillMode: message.fillMode,
         scope: message.scope,
       })
@@ -165,6 +167,10 @@
     isWorking = true;
 
     try {
+      if (request.fillMethod === "markdown") {
+        if (request.scope === "selection") throw new Error("Markdown 模式仅支持整页和增量填写");
+        return await handleMarkdownFill(modelId, request.markdown, request.fillMode);
+      }
       if (!resumeProfile || typeof resumeProfile !== "object") {
         throw new Error("标准简历为空：请先在侧边栏填写或导入标准简历");
       }
@@ -393,6 +399,82 @@
     }
   }
 
+  async function handleMarkdownFill(modelId, markdown, fillMode) {
+    window.ResumeFormPlan.buildPayload([], markdown);
+    sendLog("info", "扫描全部字段，然后根据 Markdown 生成全表目标值…");
+    const safeClick = (el) => {
+      const button = el?.closest?.('button,input[type="submit"],input[type="image"]');
+      if (button && String(button.type || "submit").toLowerCase() === "submit") return false;
+      const link = el?.closest?.("a[href]");
+      if (link && !String(link.getAttribute("href") || "").startsWith("#")) return false;
+      return true;
+    };
+    await triggerExpandableSections(null, { allowClick: safeClick });
+    // The selection scanner with no rectangle reads the entire document, including
+    // multiple forms. No selection UI is opened in Markdown mode.
+    const scan = scanFields({ scope: "selection" });
+    const seen = new Set(scan.runtime.map((runtime) => runtime.el).filter(Boolean));
+    for (const el of document.querySelectorAll('[role="combobox"]')) {
+      if (seen.has(el) || el.querySelector?.('input,textarea,select,[role="combobox"]') ||
+          !isVisible(el) || !isFillableElement(el)) continue;
+      const fieldId = `md_${scan.fields.length + 1}`;
+      const meta = buildFieldSemanticMeta(el, { kind: "text" });
+      scan.fields.push({ fieldId, kind: "combobox", ...meta });
+      scan.runtime.push({ fieldId, kind: "combobox", el });
+    }
+    for (let index = 0; index < scan.fields.length; index++) {
+      const field = scan.fields[index], runtime = scan.runtime.find((item) => item.fieldId === field.fieldId);
+      const el = runtime?.el;
+      if (!el) continue;
+      const combo = el.closest?.('[role="combobox"]');
+      if (combo || el.getAttribute("aria-autocomplete") || el.getAttribute("aria-haspopup") === "listbox") {
+        field.kind = runtime.kind = "combobox";
+        runtime.trigger = combo || el;
+      }
+      if (["select", "combobox"].includes(field.kind)) field.dynamicOptions = true;
+      for (const attr of ["minLength", "maxLength"]) {
+        if (Number.isInteger(el[attr]) && el[attr] >= 0) field[attr] = el[attr];
+      }
+      for (const attr of ["min", "max", "step", "pattern"]) {
+        const value = el.getAttribute(attr); if (value != null && value !== "") field[attr] = value;
+      }
+      if (field.kind === "select") field.options = Array.from(el.options || []).filter((option) =>
+        !option.disabled && !option.parentElement?.disabled && String(option.value || "").trim()).map((option) => String(option.textContent || "").trim());
+    }
+    // Restore DOM order (the legacy scanner appends grouped radio/checkbox fields).
+    const anchor = (field) => {
+      const runtime = scan.runtime.find((item) => item.fieldId === field.fieldId);
+      return runtime?.el || runtime?.options?.[0]?.el;
+    };
+    scan.fields.sort((left, right) => {
+      const position = anchor(left)?.compareDocumentPosition?.(anchor(right)) || 0;
+      return position & 4 ? -1 : position & 2 ? 1 : 0;
+    });
+    lastFieldCount = scan.fields.length; lastMappedCount = 0; lastFilledCount = 0;
+    sendStats(lastFieldCount, 0, 0);
+    if (!scan.fields.length) return { success: false, message: "未识别到可填写字段" };
+    const controls = window.ResumeMarkdownControls.create({
+      hasExistingFieldValue, fillOne, setNativeValue, setValueWithEvents,
+      clickLikeUser: (el) => { if (safeClick(el)) clickLikeUser(el); }, safeCheck, isVisible, sleep,
+    });
+    const result = await window.ResumeMarkdownFill.run({
+      modelId, markdown, fillMode, scan, controls,
+      callAI: (...args) => aiClient.callAI(...args),
+      page: { url: location.origin + location.pathname, title: String(document.title || "").slice(0, 120) },
+      onProgress(item, report) {
+        lastMappedCount = report.filter((entry) => entry.source !== "missing").length;
+        lastFilledCount = report.filter((entry) => ["filled", "generated"].includes(entry.status)).length;
+        sendStats(lastFieldCount, lastMappedCount, lastFilledCount);
+        sendLog(["missing", "failed"].includes(item.status) ? "warning" : "info",
+          `[Markdown] fieldId=${item.fieldId} status=${item.status} source=${item.source}`);
+      },
+    });
+    lastMappedCount = result.mappedCount; lastFilledCount = result.filledCount;
+    sendStats(lastFieldCount, lastMappedCount, lastFilledCount);
+    sendLog("success", `Markdown 填写完成：${lastFilledCount}/${lastFieldCount}，请核对结果并手动提交。`);
+    return result;
+  }
+
   function normalizeDeepScanText(value) {
     return String(value || "")
       .toLowerCase()
@@ -563,7 +645,7 @@
     });
   }
 
-  async function triggerExpandableSections(resumeProfile) {
+  async function triggerExpandableSections(resumeProfile, { allowClick = () => true } = {}) {
     const clickedElements = new WeakSet();
     let totalClicked = 0;
 
@@ -572,7 +654,7 @@
       round < DEEP_SCAN_MAX_ROUNDS && totalClicked < DEEP_SCAN_MAX_CLICKS;
       round += 1
     ) {
-      const buttons = findDeepScanButtons(clickedElements, resumeProfile);
+      const buttons = findDeepScanButtons(clickedElements, resumeProfile).filter(allowClick);
       if (buttons.length === 0) break;
 
       sendLog("info", `深度扫描第 ${round + 1} 轮：发现 ${buttons.length} 个可展开区块`);

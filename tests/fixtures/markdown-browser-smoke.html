@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Markdown mode browser smoke</title>
+<h1>Markdown mode browser smoke</h1>
+<form id="first">
+  <label for="fullName">姓名</label><input id="fullName">
+  <label for="city">城市</label><select id="city"><option value="">请选择</option></select>
+  <button id="implicitSubmit">展开</button>
+</form>
+<form id="second">
+  <label for="school">学校</label><input id="school" role="combobox" aria-controls="schools" aria-expanded="false">
+  <div id="schools" role="listbox"></div>
+  <label for="bio">自我评价</label><textarea id="bio" maxlength="100"></textarea>
+  <label for="salary">期望薪资</label><input id="salary">
+</form>
+<pre id="result">RUNNING</pre>
+<script>
+  let contentListener, aiCalls = 0, submitted = 0, clickedSubmit = 0, searchBeforePlan = false;
+  const markdown = "姓名：Alice\n城市：宁波\n学校：武汉大学\n经历：参与基金运营，整理用户反馈。";
+  document.addEventListener("submit", (event) => { event.preventDefault(); submitted++; });
+  document.getElementById("implicitSubmit").addEventListener("click", () => { clickedSubmit++; });
+  window.chrome = { runtime: {
+    onMessage: { addListener: (fn) => { contentListener = fn; } },
+    sendMessage(message, callback) {
+      if (message.action !== "callAI") { callback?.({}); return Promise.resolve(); }
+      aiCalls++;
+      const fields = JSON.parse(message.prompt).fields;
+      const data = {
+        fullName: ["Alice", "Alice", "extracted"], city: ["宁波", "宁波", "extracted"],
+        school: ["武汉大学", "武汉大学", "extracted"],
+        bio: ["有基金运营经验，重视用户反馈。", "参与基金运营，整理用户反馈。", "generated"],
+      };
+      setTimeout(() => callback({ success: true, data: JSON.stringify({ answers: fields.map((field) => {
+        const item = data[field.id];
+        return item ? { fieldId: field.fieldId, value: item[0], source: item[2], evidence: [item[1]] }
+          : { fieldId: field.fieldId, value: null, source: "missing", reason: "请补充期望薪资" };
+      }) }) }), 50);
+    },
+  } };
+  document.getElementById("fullName").addEventListener("input", () => {
+    setTimeout(() => { document.getElementById("city").innerHTML = '<option value="">请选择</option><option value="ningbo">宁波</option>'; }, 150);
+  });
+  document.getElementById("school").addEventListener("input", (event) => {
+    if (!aiCalls) searchBeforePlan = true;
+    event.target.setAttribute("aria-expanded", "true");
+    setTimeout(() => {
+      const list = document.getElementById("schools");
+      list.innerHTML = '<div role="option">武汉大学（其他）</div><div id="schoolTarget" role="option">武汉大学</div>';
+      document.getElementById("schoolTarget").onclick = () => {
+        event.target.value = "武汉大学"; event.target.setAttribute("aria-expanded", "false"); list.replaceChildren();
+      };
+    }, 150);
+  });
+</script>
+<script src="../../shared/resume-schema.js"></script>
+<script src="../../shared/diagnostics.js"></script>
+<script src="../../shared/field-text.js"></script>
+<script src="../../shared/field-semantics.js"></script>
+<script src="../../shared/fill-runtime.js"></script>
+<script src="../../shared/content-bridge.js"></script>
+<script src="../../shared/ai-client.js"></script>
+<script src="../../shared/form-plan.js"></script>
+<script src="../../shared/markdown-controls.js"></script>
+<script src="../../shared/markdown-fill.js"></script>
+<script src="../../content.js"></script>
+<script>
+  contentListener({ action: "startFill", fillMethod: "markdown", markdown, fillMode: "incremental", scope: "page" }, {}, (result) => {
+    const actual = { name: document.getElementById("fullName").value, city: document.getElementById("city").value,
+      school: document.getElementById("school").value, salary: document.getElementById("salary").value,
+      aiCalls, searchBeforePlan, submitted, clickedSubmit };
+    const passed = result.success && result.fieldCount === 5 && result.filledCount === 4 && actual.name === "Alice" && actual.city === "ningbo" &&
+      actual.school === "武汉大学" && actual.salary === "" && aiCalls === 1 && !searchBeforePlan && !submitted && !clickedSubmit;
+    document.getElementById("result").textContent = JSON.stringify({ passed, actual, result }, null, 2);
+    document.title = passed ? "PASS" : "FAIL";
+  });
+</script>

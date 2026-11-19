@@ -1,0 +1,2 @@
+# The legacy deep-scan tests extract helpers across blank lines.
+content.js text eol=lf

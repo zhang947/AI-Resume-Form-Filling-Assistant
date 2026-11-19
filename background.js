@@ -1,7 +1,7 @@
 // Background Service Worker
 // 统一代理调用 OpenAI 兼容接口（如 DeepSeek），避免侧边栏/内容脚本的 CORS 问题。
 
-importScripts("shared/model-storage.js");
+importScripts("shared/model-storage.js", "shared/form-plan.js");
 
 // 初始化：点击扩展图标时打开侧边栏
 chrome.runtime.onInstalled.addListener(() => {
@@ -47,6 +47,7 @@ async function callAI(modelId, prompt, mode) {
   }
 
   const systemPrompts = {
+    field_values: globalThis.ResumeFormPlan.SYSTEM_PROMPT,
     resume_import: `你是一个“标准化简历整理助手”。
 
 用户会提供原始简历文本，以及一个固定 JSON 模板。你的任务是把简历内容提取并填入该模板。
