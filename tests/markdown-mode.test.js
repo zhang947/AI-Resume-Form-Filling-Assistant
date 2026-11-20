@@ -263,14 +263,25 @@ test("Markdown editor retains separate template drafts, imports and exports with
 test("Markdown conversion delegates only on an explicit conversion click and never saves a document automatically", async () => {
   const harness = editorHarness(), { context, node, writes } = harness;
   let conversions = 0;
-  Object.assign(context, { markdownEditor: null, activeTemplateId: "a", updateStartFillAvailability() {}, addLog() {},
+  Object.assign(context, { markdownEditor: null, activeTemplateId: "a", templates: [], updatePageStatus() {},
     importResumeToSchema: async (text) => { conversions++; assert.equal(typeof text, "string"); },
   });
-  const popup = fs.readFileSync(path.join(__dirname, "../popup.js"), "utf8");
-  vm.runInContext(popup.slice(popup.indexOf("function getFillMethod()")), context);
-  context.initMarkdownMode(); await context.markdownEditor.load("a");
-  assert.equal(context.getFillMethod(), "fields"); assert.equal(conversions, 0);
+  const editor = fs.readFileSync(path.join(__dirname, "../resume-editor.js"), "utf8");
+  vm.runInContext(editor.slice(editor.indexOf("function initMarkdownEditor()")), context);
+  context.initMarkdownEditor(); await context.markdownEditor.load("a");
+  assert.equal(conversions, 0);
   await node("convertMarkdownBtn").click(); assert.equal(conversions, 1); assert.equal(writes.length, 0);
+});
+test("Markdown configuration controls exist only on the resume configuration page", () => {
+  const popup = fs.readFileSync(path.join(__dirname, "../popup.html"), "utf8");
+  const editor = fs.readFileSync(path.join(__dirname, "../resume-editor.html"), "utf8");
+  for (const id of ["markdownDocumentPanel", "markdownEditor", "saveMarkdownBtn", "reloadMarkdownBtn", "importMarkdownBtn", "exportMarkdownBtn", "convertMarkdownBtn"]) {
+    assert.equal(popup.includes(`id="${id}"`), false, id);
+    assert.equal(editor.split(`id="${id}"`).length - 1, 1, id);
+  }
+  assert.equal(popup.includes('src="shared/markdown-editor.js"'), false);
+  assert.ok(popup.includes('src="shared/markdown-source.js"'));
+  assert.ok(editor.includes('id="uploadPdfBtn"'));
 });
 
 test("the original AI gateway supports all existing modes alongside the Markdown plan", async () => {

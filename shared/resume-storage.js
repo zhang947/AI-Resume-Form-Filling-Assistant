@@ -207,7 +207,9 @@
         next.schemaVersion = content.schemaVersion;
       }
     }
-    next.updatedAt = nowIso();
+    // A clear/save must invalidate an older AI preview even if the data is
+    // unchanged or two writes happen within the same millisecond.
+    next.updatedAt = new Date(Math.max(Date.now(), (Date.parse(next.updatedAt) || 0) + 1)).toISOString();
 
     state.templates[index] = next;
     await persistTemplates(storage, state.templates, state.activeTemplateId);

@@ -57,7 +57,7 @@
               <option value="markdown">Markdown＋AI 模式</option>
             </select>
           </div>
-          <p class="tip" id="markdownFillNotice" hidden>根据当前模板的 Markdown 扫描整页并生成答案；资料会发送到已配置的模型接口。支持整页和增量填写，完成后请核对并手动提交。</p>
+          <!-- <p class="tip" id="markdownFillNotice" hidden>根据当前模板的 Markdown 扫描整页并生成答案；资料会发送到已配置的模型接口。支持整页和增量填写，完成后请核对并手动提交。</p> -->
           <div id="markdownFillReport" class="section-block" aria-live="polite" hidden></div>
           <div class="template-bar">
             <label for="fillTemplateSelect">简历模板（本次填充使用）</label>
@@ -132,18 +132,18 @@
             </div>
             <input type="file" id="importTemplatesFile" accept="application/json" hidden />
             <input type="file" id="importResumeJsonFile" accept="application/json" hidden />
-            <div class="tip">
+            <!-- <div class="tip">
               每个模板是一份独立的资料库。基础信息相近时，可“复制当前”后只改侧重点（如测开 / 游戏开发 / 普通开发）。填充前在上方“自动填充”页切换模板即可。
-            </div>
+            </div> -->
           </div>
 
           <div class="section-block">
             <div class="section-header section-header-normal">
               <span>简历配置</span>
             </div>
-            <div class="tip">
+            <!-- <div class="tip">
               简历字段较多，推荐在独立网页里编辑。新页面会复用当前扩展里的同一份资料库数据。
-            </div>
+            </div> -->
             <div class="resume-launch-card">
               <div class="resume-launch-copy">
                 <div class="resume-launch-title">在宽页面里配置个人简历</div>
@@ -153,26 +153,10 @@
               </div>
               <button class="btn btn-primary" id="openResumeEditorBtn">打开简历配置页</button>
             </div>
-            <p class="tip">分组、条目和字段均由你自行添加；也可用下方 Markdown 解析生成后保存。</p>
+            <!-- <p class="tip">分组、条目和字段均由你自行添加；Markdown 编辑与 AI 解析统一在简历配置页完成。</p> -->
             <div class="resume-summary-grid" id="resumeSummaryGrid"></div>
           </div>
 
-          <div class="section-block" id="markdownDocumentPanel">
-            <div class="section-header section-header-normal"><span>Markdown 资料（可选）</span></div>
-            <p class="tip">与当前模板关联，独立于字段库存储。编辑或填写不会改变字段资料。缺失的客观事实与个人意愿需补充，描述题仅依据已有经历撰写。</p>
-            <label for="markdownEditor">Markdown 内容</label>
-            <textarea id="markdownEditor" class="textarea" rows="14" spellcheck="false" placeholder="# 个人资料"></textarea>
-            <p id="markdownStatus" class="tip" role="status"></p>
-            <div class="action-row">
-              <button id="saveMarkdownBtn" class="btn btn-primary">保存 Markdown</button>
-              <button id="reloadMarkdownBtn" class="btn btn-outline">重新加载</button>
-              <button id="importMarkdownBtn" class="btn btn-outline">导入 .md</button>
-              <button id="exportMarkdownBtn" class="btn btn-outline">导出 .md</button>
-              <button id="convertMarkdownBtn" class="btn btn-outline">AI 解析并添加信息（预览）</button>
-            </div>
-            <input type="file" id="importMarkdownFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
-
-          </div>
           <div class="resume-sidepanel-legacy" hidden>
             <div class="section-block">
               <div class="section-header section-header-normal">
@@ -181,9 +165,9 @@
                   <button class="btn-text" id="reloadResumeBtn">重新加载</button>
                 </div>
               </div>
-              <div class="tip">
+              <!-- <div class="tip">
                 主流程以这份资料库为准。请尽量填写完整，尤其是基本信息、工作经历、教育经历和求职偏好。
-              </div>
+              </div> -->
               <div class="resume-editor-layout">
                 <aside class="resume-nav" id="resumeNav"></aside>
                 <div class="resume-form-host" id="resumeFormHost"></div>
@@ -197,9 +181,9 @@
               <div class="section-header section-header-normal">
                 <span>导入辅助（可选）</span>
               </div>
-              <div class="tip">
+              <!-- <div class="tip">
                 你仍然可以粘贴原始简历文本或上传 PDF，用 AI 预填上面的标准字段；导入后请自行检查并保存。
-              </div>
+              </div> -->
               <div class="form-group">
                 <label for="resumeImportText">原始简历文本</label>
                 <textarea
@@ -221,11 +205,11 @@
           <div class="section-header">
             <span>运行日志</span>
             <div class="section-actions">
-              <button class="btn-text" id="selectLogDirectoryBtn">选择项目目录</button>
+              <button class="btn-text" id="selectLogDirectoryBtn" hidden>选择项目目录</button>
               <button class="btn-text" id="clearLog">清空</button>
             </div>
           </div>
-          <div class="tip" id="logExportStatus">
+          <div class="tip" id="logExportStatus" hidden>
             未配置自动导出。点击“选择项目目录”后，填充诊断日志会自动保存到所选目录下的 debug-logs/。
           </div>
           <div class="log-container" id="logContent">
@@ -264,7 +248,7 @@
           <div class="modal-body">
             <div class="section-block">
               <label class="lookup-setting"><input type="checkbox" id="selectionLookupEnabled" /> 开启选词查简历</label>
-              <p class="tip">默认关闭。开启后，在网页拖动选中文字，即可查看当前模板字段库中已保存的相关资料。点击候选仅复制，由你自行粘贴；本功能不调用 AI。</p>
+              <p class="tip">默认关闭。开启后，在网页拖动选中文字，即可查看当前模板字段库中已保存的相关资料。点击候选仅复制，由你自行粘贴。</p>
               <p class="tip" id="selectionLookupStatus" role="status"></p>
             </div>
             <div class="section-header section-header-normal"><span>模型配置</span></div>
@@ -415,7 +399,7 @@
     <script src="shared/content-bridge.js"></script>
     <script src="shared/form-plan.js"></script>
     <script src="shared/markdown-storage.js"></script>
-    <script src="shared/markdown-editor.js"></script>
+    <script src="shared/markdown-source.js"></script>
     <script src="shared/selection-lookup-registration.js"></script>
     <script src="shared/custom-fields-editor.js"></script>
     <script src="shared/library-import.js"></script>

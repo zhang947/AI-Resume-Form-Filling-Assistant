@@ -330,6 +330,16 @@ test("a failed first initialization does not mark reset complete or delete legac
   assert.equal(fake.state.local.resumeProfile.original, "retained until reset succeeds");
   assert.equal(fake.calls.localRemove.length, 0); assert.equal(fake.calls.syncRemove.length, 0);
 });
+test("saving or clearing an unchanged profile always changes its revision even within one clock tick", async () => {
+  const storage = loadResumeStorage(), fake = createStorage();
+  const first = await storage.loadTemplateState(fake.storage), id = first.activeTemplateId;
+  const future = "2090-01-01T00:00:00.000Z";
+  fake.state.local.resumeTemplates[id].updatedAt = future;
+  const saved = await storage.saveTemplateContent(id, { profile: { groups: [] }, rawText: "" }, fake.storage);
+  const cleared = await storage.saveTemplateContent(id, { profile: { groups: [] }, rawText: "" }, fake.storage);
+  assert.equal(Date.parse(saved.updatedAt), Date.parse(future) + 1);
+  assert.equal(Date.parse(cleared.updatedAt), Date.parse(saved.updatedAt) + 1);
+});
 test("malformed dynamic JSON is rejected before replacing the saved library", async () => {
   const storage = loadResumeStorage(), fake = createStorage();
   const first = await storage.loadTemplateState(fake.storage);

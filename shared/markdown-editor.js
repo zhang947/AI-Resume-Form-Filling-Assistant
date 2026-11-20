@@ -1,6 +1,6 @@
 (function (root) {
   "use strict";
-  function create({ onChange = () => {}, onConvert, onLog = () => {} }) {
+  function create({ onChange = () => {}, onConvert, onLog = () => {}, getFallbackMarkdown = () => "" }) {
     const storage = root.ResumeMarkdownStorage;
     const byId = (id) => document.getElementById(id);
     const input = byId("markdownEditor");
@@ -23,10 +23,12 @@
       const token = ++generation;
       loading = true; refresh();
       try {
-        const saved = await storage.load(id);
+        const saved = storage.loadDocument ? await storage.loadDocument(id) : { exists: true, markdown: await storage.load(id) };
         if (token !== generation) return;
         const draft = force ? undefined : drafts.get(id);
-        input.value = draft ?? saved; dirty = draft !== undefined;
+        const fallback = saved.exists ? "" : String(getFallbackMarkdown(id) || "");
+        input.value = draft ?? (saved.exists ? saved.markdown : fallback);
+        dirty = draft !== undefined || Boolean(fallback);
         if (force) drafts.delete(id);
       } catch (error) {
         if (token === generation) { activeId = null; input.value = ""; dirty = false; }
@@ -39,13 +41,20 @@
       if (activeId === id && input.value === snapshot) { dirty = false; drafts.delete(id); }
       refresh();
     }
+    function finishBusy() {
+      busy = false; refresh();
+      if (!pendingReload) return;
+      pendingReload = false;
+      if (dirty) status("其他窗口修改了 Markdown；请保存或重新加载后核对。");
+      else load(activeId, true).catch((error) => onLog("error", error.message));
+    }
     function bind(id, fn, event = "click") {
       byId(id).addEventListener(event, async (ev) => {
         if (busy || loading) return;
         busy = true; refresh();
         try { await fn(ev); }
         catch (error) { onLog("error", error.message); status(error.message); }
-        finally { busy = false; refresh(); }
+        finally { finishBusy(); }
       });
     }
     function download(content) {
@@ -69,7 +78,7 @@
       input.value = text; dirty = true;
     }, "change");
     bind("convertMarkdownBtn", async () => {
-      root.ResumeFormPlan.buildPayload([], input.value);
+      if (!input.value.trim()) throw new Error("请先填写 Markdown 资料");
       const id = activeId;
       await onConvert(input.value, id);
     });
@@ -84,13 +93,10 @@
     });
     refresh();
     return { load, save, getMarkdown: () => input.value, isBusy: () => busy || loading,
+      setMarkdown(value) { input.value = String(value || ""); dirty = true; refresh(); },
       setBusy(value) {
-        busy = value; refresh();
-        if (!busy && pendingReload) {
-          pendingReload = false;
-          if (dirty) status("其他窗口修改了 Markdown；请保存或重新加载后核对。");
-          else load(activeId, true).catch((error) => onLog("error", error.message));
-        }
+        if (!value) finishBusy();
+        else { busy = true; refresh(); }
       } };
   }
   root.ResumeMarkdownEditor = Object.freeze({ create });

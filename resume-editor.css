@@ -473,6 +473,76 @@ body.resume-editor-page {
   gap: 16px;
 }
 
+/* Markdown configuration has its own dimensions rather than sidebar defaults. */
+.markdown-panel .editor-import-title {
+  font-size: 14px;
+}
+
+.markdown-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.markdown-input-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.markdown-panel .textarea {
+  display: block;
+  min-height: 360px;
+  height: clamp(360px, 46vh, 560px);
+  padding: 14px 16px;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  line-height: 1.65;
+}
+
+.markdown-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.markdown-status {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.markdown-document-actions {
+  margin-left: auto;
+}
+
+.markdown-panel .action-row {
+  gap: 10px;
+}
+
+.markdown-panel .btn {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 10px 14px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.markdown-panel .action-row .btn {
+  flex: 0 1 auto;
+}
+
+.markdown-panel .library-import-preview > .btn {
+  display: inline-flex;
+}
+
+.markdown-analysis-actions {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
 /* ─── Responsive ─────────────────────────────────────────────────────────── */
 @media (max-width: 960px) {
   .editor-shell {
@@ -520,6 +590,21 @@ body.resume-editor-page {
 }
 
 @media (max-width: 640px) {
+  .markdown-panel .editor-import-header,
+  .markdown-panel .editor-import-body {
+    padding: 16px;
+  }
+
+  .markdown-panel .textarea {
+    min-height: 260px;
+    height: 320px;
+  }
+
+  .markdown-document-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .resume-fields-grid {
     grid-template-columns: 1fr;
   }

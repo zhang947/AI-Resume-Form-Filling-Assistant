@@ -130,7 +130,7 @@ const BUILTIN_MODEL = modelStorage.DEFAULT_MODEL;
 
 let editingModelId = null;
 let isFilling = false;
-let markdownEditor = null;
+let markdownSource = null;
 let isImporting = false;
 let isResumeDirty = false;
 let resumeProfile = schema.createEmptyResumeProfile();
@@ -922,7 +922,7 @@ async function loadResumeProfile() {
     templates = state.templates;
     activeTemplateId = state.activeTemplateId;
     renderTemplateSelectors();
-    await markdownEditor?.load(activeTemplateId);
+    await markdownSource?.load(activeTemplateId);
 
     const active = state.templates.find(
       (template) => template.id === state.activeTemplateId
@@ -1312,7 +1312,9 @@ async function importResumeToSchema(rawText) {
   importResumeBtn.textContent = "解析中...";
   try {
     const state = await resumeStorage.loadTemplateState();
-    const before = state.templates.find((t) => t.id === importTemplateId)?.profile || { groups: [] };
+    const beforeTemplate = state.templates.find((t) => t.id === importTemplateId);
+    const before = beforeTemplate?.profile || { groups: [] };
+    const beforeUpdatedAt = beforeTemplate?.updatedAt;
     const parsed = await window.ResumeLibraryImport.extract({
       schema, source: text, buildPrompt: resumePrompts.buildResumeImportPrompt, parse: parseJsonFromAiText,
       callAI: (prompt) => aiClient.callAI(activeModel.id, prompt, "resume_import"),
@@ -1325,7 +1327,7 @@ async function importResumeToSchema(rawText) {
       async onApply(selected) {
         const fresh = await resumeStorage.loadTemplateState();
         const current = fresh.templates.find((t) => t.id === importTemplateId);
-        if (activeTemplateId !== importTemplateId || fresh.activeTemplateId !== importTemplateId || isResumeDirty || !current || JSON.stringify(current.profile) !== JSON.stringify(before)) throw new Error("资料或模板已修改，请重新解析后核对");
+        if (activeTemplateId !== importTemplateId || fresh.activeTemplateId !== importTemplateId || isResumeDirty || !current || current.updatedAt !== beforeUpdatedAt || JSON.stringify(current.profile) !== JSON.stringify(before)) throw new Error("资料或模板已修改，请重新解析后核对");
         const profile = window.ResumeLibraryImport.apply(schema, plan, selected);
         await resumeStorage.saveTemplateContent(importTemplateId, { profile, rawText: text, schemaVersion: schema.version });
         await loadResumeProfile(); addLog("success", "所选信息已保存到资料库，原始文本已保留");
@@ -1414,14 +1416,19 @@ async function runFill(actionKey) {
 
   const markdownMode = getFillMethod() === "markdown";
   const sourceTemplateId = activeTemplateId;
-  const markdownSnapshot = markdownMode ? markdownEditor?.getMarkdown() : undefined;
-  if (markdownMode && (actionKey === "selection" || markdownEditor?.isBusy())) return;
+  let markdownSnapshot;
+  if (markdownMode && actionKey === "selection") return;
+  if (markdownMode) {
+    try { markdownSnapshot = await markdownSource.load(sourceTemplateId); }
+    catch (error) { addLog("error", `读取已保存 Markdown 失败：${error.message}`); return; }
+    if (sourceTemplateId !== activeTemplateId) { addLog("warning", "模板已切换，请重新开始"); return; }
+  }
   if (!markdownMode && isResumeDirty) {
     if (await persistResumeProfile({ silent: true }) === false) return;
   }
 
-  if (markdownMode ? !markdownEditor?.getMarkdown().trim() : !schema.hasAnyFilledField(resumeProfile)) {
-    addLog("warning", markdownMode ? "请先在简历资料中填写 Markdown" : "请先在“标准简历”里填写至少一个字段");
+  if (markdownMode ? !markdownSnapshot?.trim() : !schema.hasAnyFilledField(resumeProfile)) {
+    addLog("warning", markdownMode ? "请先在简历配置页填写并保存 Markdown" : "请先在“标准简历”里填写至少一个字段");
     switchTab("resume");
     return;
   }
@@ -1456,7 +1463,6 @@ async function runFill(actionKey) {
     addLog("warning", "填写资料或方式已切换，请重新开始"); return;
   }
   isFilling = true;
-  markdownEditor?.setBusy(true);
   document.getElementById("markdownFillReport").hidden = true;
   updateFillActionButtons({ isRunning: true, runningActionKey: actionKey });
   fillTipEl.hidden = true;
@@ -1526,7 +1532,6 @@ async function runFill(actionKey) {
     });
   } finally {
     isFilling = false;
-    markdownEditor?.setBusy(false);
     updateStartFillAvailability();
   }
 }
@@ -1545,11 +1550,11 @@ function updateFillStats(fieldCount, mappedCount, filledCount) {
 }
 
 function updateStartFillAvailability() {
-  const hasData = getFillMethod() === "markdown" ? Boolean(markdownEditor?.getMarkdown().trim()) : schema.hasAnyFilledField(resumeProfile);
-  updateFillActionButtons({ hasData, isRunning: isFilling || Boolean(markdownEditor?.isBusy()) });
+  const hasData = getFillMethod() === "markdown" ? Boolean(markdownSource?.getMarkdown().trim()) : schema.hasAnyFilledField(resumeProfile);
+  updateFillActionButtons({ hasData, isRunning: isFilling || Boolean(markdownSource?.isBusy()) });
   document.getElementById("fillMethod").disabled = isFilling;
   if (getFillMethod() === "markdown") startSelectionFillBtn.disabled = true;
-  const locked = isFilling || Boolean(markdownEditor?.isBusy());
+  const locked = isFilling || Boolean(markdownSource?.isBusy());
   for (const id of ["fillTemplateSelect", "resumeTemplateSelect", "newTemplateBtn", "duplicateTemplateBtn", "renameTemplateBtn", "deleteTemplateBtn", "importTemplatesBtn", "importResumeJsonBtn"]) {
     document.getElementById(id).disabled = locked;
   }
@@ -1585,7 +1590,7 @@ function updateFillActionButtons({
     item.button.disabled = !hasData || isRunning;
     if (getFillMethod() === "markdown" && item.key === "selection") item.button.disabled = true;
     if (!hasData) {
-      item.labelEl.textContent = getFillMethod() === "markdown" ? "请先填写 Markdown" : "请先填写标准简历";
+      item.labelEl.textContent = getFillMethod() === "markdown" ? "请在配置页保存 Markdown" : "请先填写标准简历";
     } else if (isCurrent && isRunning) {
       item.labelEl.textContent = config.runningText;
     } else {
@@ -1905,13 +1910,10 @@ function getFillMethod() {
 }
 
 function initMarkdownMode() {
-  markdownEditor = window.ResumeMarkdownEditor.create({
+  markdownSource = window.ResumeMarkdownSource.create({
+    storage: window.ResumeMarkdownStorage, changes: chrome.storage.onChanged,
     onChange: updateStartFillAvailability,
-    onLog: addLog,
-    async onConvert(markdown, id) {
-      if (id !== activeTemplateId) throw new Error("模板已切换，请重试");
-      await importResumeToSchema(markdown);
-    },
+    onError: (error) => addLog("error", `读取已保存 Markdown 失败：${error.message}`),
   });
   document.getElementById("fillMethod").addEventListener("change", () => {
     document.getElementById("markdownFillNotice").hidden = getFillMethod() !== "markdown";

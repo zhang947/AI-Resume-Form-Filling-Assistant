@@ -9,16 +9,17 @@
   function area(storage) {
     return (storage || globalThis.chrome.storage).local;
   }
-  async function load(id, storage) {
+  async function loadDocument(id, storage) {
     const data = await area(storage).get(KEY);
     const value = data[KEY]?.[id];
-    return typeof value === "string" ? value : "";
+    return { exists: typeof value === "string", markdown: typeof value === "string" ? value : "" };
   }
+  async function load(id, storage) { return (await loadDocument(id, storage)).markdown; }
   async function save(id, markdown, storage) {
     if (!id || typeof markdown !== "string") throw new Error("Markdown 资料无效");
     const local = area(storage);
     const data = await local.get(KEY);
     await local.set({ [KEY]: { ...data[KEY], [id]: markdown } });
   }
-  return Object.freeze({ KEY, load, save });
+  return Object.freeze({ KEY, load, loadDocument, save });
 });

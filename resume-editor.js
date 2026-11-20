@@ -2,8 +2,9 @@ const resumeNavEl = document.getElementById("resumeNav");
 const resumeFormHost = document.getElementById("resumeFormHost");
 const saveResumeBtn = document.getElementById("saveResumeBtn");
 const reloadResumeBtn = document.getElementById("reloadResumeBtn");
-const resumeImportTextEl = document.getElementById("resumeImportText");
-const importResumeBtn = document.getElementById("importResumeBtn");
+const clearResumeBtn = document.getElementById("clearResumeBtn");
+const resumeImportTextEl = document.getElementById("markdownEditor");
+const importResumeBtn = document.getElementById("convertMarkdownBtn");
 const uploadPdfBtn = document.getElementById("uploadPdfBtn");
 const resumePdfFileEl = document.getElementById("resumePdfFile");
 const pageStatusEl = document.getElementById("pageStatus");
@@ -61,6 +62,8 @@ const RESUME_LEGACY_RAW_TEXT_KEY = resumeStorage.keys.rawText;
 const BUILTIN_MODEL = modelStorage.DEFAULT_MODEL;
 
 let isImporting = false;
+let markdownEditor = null;
+let isClearingResume = false;
 let isResumeDirty = false;
 let resumeProfile = schema.createEmptyResumeProfile();
 let templates = [];
@@ -72,6 +75,7 @@ let customFieldsEditor = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
   customFieldsEditor = window.ResumeCustomFieldsEditor.create({ document, host: resumeFormHost, nav: resumeNavEl, schema, onChange: markResumeDirty });
+  initMarkdownEditor();
   initResumeEditorEvents();
   initTemplateEvents();
   await initModels();
@@ -89,7 +93,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     return;
   }
 
-  if (isResumeDirty || isImporting) {
+  if (isResumeDirty || isImporting || isClearingResume) {
     return;
   }
 
@@ -387,7 +391,7 @@ async function loadResumeProfile() {
       (template) => template.id === state.activeTemplateId
     );
     resumeProfile = schema.normalizeResumeProfile(active?.profile || {});
-    resumeImportTextEl.value = active?.rawText || "";
+    await markdownEditor.load(activeTemplateId);
     resetCollapsedResumeSections();
     renderResumeEditor(resumeProfile);
     isResumeDirty = false;
@@ -665,6 +669,43 @@ function removeResumeListItem(sectionKey, itemIndex) {
   openResumeSection(sectionKey);
 }
 
+async function handleClearResume() {
+  if (isClearingResume || isLoadingResume) return;
+  if (isImporting || markdownEditor?.isBusy() || uploadPdfBtn.disabled) { updatePageStatus("warning", "资料正在读取或解析，请等待结束后再清空资料。"); return; }
+  const targetId = activeTemplateId;
+  if (!targetId) return;
+  const templateName = templates.find((t) => t.id === targetId)?.name || "当前模板";
+  if (!window.confirm(`确定清空「${templateName}」的全部分组、条目和字段吗？\n未保存的字段编辑也会删除，确认后立即生效。\n其他模板、Markdown 资料和模型配置会保留。`)) return;
+  isClearingResume = true; clearResumeBtn.disabled = true;
+  const toolbar = document.querySelector(".editor-toolbar"), importSection = document.querySelector(".editor-import-section");
+  if (toolbar) toolbar.inert = true;
+  if (importSection) importSection.inert = true;
+  resumeFormHost.inert = true; resumeTemplateSelect.disabled = true;
+  resumeImportTextEl.disabled = true; saveResumeBtn.disabled = true;
+  try {
+    const state = await resumeStorage.loadTemplateState();
+    if (state.activeTemplateId !== targetId || activeTemplateId !== targetId) throw new Error("当前模板已切换，请核对后重新清空");
+    const empty = schema.createEmptyResumeProfile();
+    const saved = await resumeStorage.saveTemplateContent(targetId, { profile: empty, rawText: "", schemaVersion: schema.version });
+    if (!saved) throw new Error("当前模板已不存在，请重新加载");
+    document.querySelectorAll(".library-import-preview").forEach((panel) => panel.remove());
+    resumeProfile = empty;
+    templates = templates.map((t) => t.id === targetId ? saved : t);
+    renderResumeEditor(empty); isResumeDirty = false;
+    document.title = "简历配置 - AI 简历填表助手";
+    updatePageStatus("success", `已清空「${templateName}」的全部字段资料，可重新添加或通过 AI 解析导入。`);
+  } catch (error) { updatePageStatus("error", `清空失败：${error.message}`); }
+  finally {
+    isClearingResume = false; clearResumeBtn.disabled = false;
+    if (toolbar) toolbar.inert = false;
+    if (importSection) importSection.inert = false;
+    resumeFormHost.inert = false; resumeTemplateSelect.disabled = false;
+    resumeImportTextEl.disabled = false; saveResumeBtn.disabled = !isResumeDirty;
+  }
+}
+
+clearResumeBtn.addEventListener("click", handleClearResume);
+
 async function persistResumeProfile({ silent = false } = {}) {
   const customError = customFieldsEditor?.validate();
   if (customError) { updatePageStatus("warning", customError); return false; }
@@ -674,7 +715,6 @@ async function persistResumeProfile({ silent = false } = {}) {
   await resumeStorage.saveTemplateContent(activeTemplateId, {
     profile: nextProfile,
     schemaVersion: schema.version,
-    rawText: resumeImportTextEl.value.trim(),
   });
 
   isResumeDirty = false;
@@ -695,9 +735,6 @@ reloadResumeBtn.addEventListener("click", async () => {
   updatePageStatus("info", "已从扩展存储重新加载标准简历。");
 });
 
-importResumeBtn.addEventListener("click", async () => {
-  await importResumeToSchema(resumeImportTextEl.value.trim());
-});
 
 uploadPdfBtn.addEventListener("click", () => {
   resumePdfFileEl.value = "";
@@ -707,6 +744,7 @@ uploadPdfBtn.addEventListener("click", () => {
 resumePdfFileEl.addEventListener("change", async () => {
   const file = resumePdfFileEl.files?.[0];
   if (!file) return;
+  const sourceTemplateId = activeTemplateId;
 
   if (file.type && file.type !== "application/pdf") {
     updatePageStatus("error", "请选择 PDF 文件。");
@@ -719,11 +757,12 @@ resumePdfFileEl.addEventListener("change", async () => {
 
   try {
     const text = await extractTextFromPdf(file);
+    if (sourceTemplateId !== activeTemplateId) throw new Error("模板已切换，请重新导入 PDF");
     if (!text) {
       throw new Error("未提取到文本：如果是扫描版 PDF，请先转为可复制文字或使用 OCR");
     }
 
-    resumeImportTextEl.value = text;
+    markdownEditor.setMarkdown(text);
     await resumeStorage.saveTemplateContent(activeTemplateId, { rawText: text });
 
     updatePageStatus("success", "PDF 文本提取完成，开始导入到标准简历...");
@@ -737,7 +776,7 @@ resumePdfFileEl.addEventListener("change", async () => {
 });
 
 async function importResumeToSchema(rawText) {
-  if (isImporting) return;
+  if (isImporting || isClearingResume) return;
   const text = String(rawText || "").trim();
   if (!text) { updatePageStatus("warning", "请先粘贴 Markdown 或资料文本，或上传 PDF"); return; }
   if (isResumeDirty) { updatePageStatus("warning", "请先保存手动编辑的资料，再进行 AI 解析"); return; }
@@ -748,7 +787,9 @@ async function importResumeToSchema(rawText) {
   importResumeBtn.textContent = "解析中...";
   try {
     const state = await resumeStorage.loadTemplateState();
-    const before = state.templates.find((t) => t.id === importTemplateId)?.profile || { groups: [] };
+    const beforeTemplate = state.templates.find((t) => t.id === importTemplateId);
+    const before = beforeTemplate?.profile || { groups: [] };
+    const beforeUpdatedAt = beforeTemplate?.updatedAt;
     const parsed = await window.ResumeLibraryImport.extract({
       schema, source: text, buildPrompt: resumePrompts.buildResumeImportPrompt, parse: parseJsonFromAiText,
       callAI: (prompt) => aiClient.callAI(activeModel.id, prompt, "resume_import"),
@@ -757,11 +798,11 @@ async function importResumeToSchema(rawText) {
     });
     if (activeTemplateId !== importTemplateId) throw new Error("模板已切换，请重新解析");
     const plan = window.ResumeLibraryImport.prepare(schema, before, parsed, text);
-    window.ResumeLibraryImport.preview({ document, host: resumeFormHost.parentElement, plan,
+    window.ResumeLibraryImport.preview({ document, host: document.getElementById?.("markdownDocumentPanel") || resumeFormHost.parentElement, plan,
       async onApply(selected) {
         const fresh = await resumeStorage.loadTemplateState();
         const current = fresh.templates.find((t) => t.id === importTemplateId);
-        if (activeTemplateId !== importTemplateId || fresh.activeTemplateId !== importTemplateId || isResumeDirty || !current || JSON.stringify(current.profile) !== JSON.stringify(before)) throw new Error("资料或模板已修改，请重新解析后核对");
+        if (activeTemplateId !== importTemplateId || fresh.activeTemplateId !== importTemplateId || isResumeDirty || !current || current.updatedAt !== beforeUpdatedAt || JSON.stringify(current.profile) !== JSON.stringify(before)) throw new Error("资料或模板已修改，请重新解析后核对");
         const profile = window.ResumeLibraryImport.apply(schema, plan, selected);
         await resumeStorage.saveTemplateContent(importTemplateId, { profile, rawText: text, schemaVersion: schema.version });
         await loadResumeProfile(); updatePageStatus("success", "所选信息已保存到资料库，原始文本已保留");
@@ -994,14 +1035,13 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;");
 }
 
-// File import stages the original Markdown; extraction remains an explicit action.
-document.getElementById("importLibraryMarkdownBtn").addEventListener("click", () => {
-  const input = document.getElementById("libraryMarkdownFile"); input.value = ""; input.click();
-});
-document.getElementById("libraryMarkdownFile").addEventListener("change", async (event) => {
-  try {
-    const file = event.target.files?.[0]; if (!file) return;
-    resumeImportTextEl.value = (await file.text()).replace(/^\uFEFF/, "");
-    updatePageStatus("info", "Markdown 已载入，点击 AI 解析并添加信息继续");
-  } catch (error) { updatePageStatus("error", `文件读取失败：${error.message}`); }
-});
+function initMarkdownEditor() {
+  markdownEditor = window.ResumeMarkdownEditor.create({
+    getFallbackMarkdown: (id) => templates.find((t) => t.id === id)?.rawText || "",
+    onLog: updatePageStatus,
+    async onConvert(markdown, id) {
+      if (id !== activeTemplateId) throw new Error("模板已切换，请重新解析");
+      await importResumeToSchema(markdown);
+    },
+  });
+}

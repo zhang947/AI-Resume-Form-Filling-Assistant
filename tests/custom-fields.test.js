@@ -72,7 +72,7 @@ test("empty editor can manually build groups, items and fields, preserve newline
   await set("字段名称", "完整描述"); await set("匹配别名（逗号或换行分隔）", "项目内容，项目描述");
   await set("内容类型", "textarea", "change"); await set("内容", longValue);
   assert.equal(h.editor.validate(), ""); assert.ok(h.changes() >= 8);
-  const saved = plain(h.editor.collect()); const next = editorHarness(); next.editor.render(saved);
+  const saved = plain(h.editor.collect()); const next = editorHarness(); next.editor.render(saved); next.editor.selectGroup(saved[0].id);
   assert.deepEqual(plain(next.editor.collect()), saved); assert.equal(next.namedControl("内容").value, longValue);
 });
 test("rename/reorder/duplicate/delete/undo at each level keep stable IDs and independent copies", () => {
@@ -88,9 +88,31 @@ test("rename/reorder/duplicate/delete/undo at each level keep stable IDs and ind
 });
 test("names, aliases and values render as text with no HTML execution", () => {
   const h = editorHarness(), profile = profileFor([{ name: "<img onerror=bad()>", aliases: ["<script>bad()</script>"], value: "<script>bad()</script>\n原文", type: "textarea" }]);
-  h.editor.render(profile.groups);
+  h.editor.render(profile.groups); h.editor.selectGroup(profile.groups[0].id);
   assert.equal(walk(h.host).some((node) => ["IMG", "SCRIPT"].includes(node.tagName)), false);
   assert.equal(h.namedControl("内容").value, "<script>bad()</script>\n原文");
+});
+test("groups start collapsed and selecting a nav entry lazily shows only that group's information", async () => {
+  const h = editorHarness(), a = info().groups[0], b = profileFor([{ name: "第二字段", value: "第二组正文" }], { group: "第二组" }).groups[0];
+  b.id = "g-second"; h.editor.render([a, b]);
+  assert.equal(walk(h.host).filter((n) => n.className === "library-group-toggle").length, 2);
+  assert.equal(h.namedControl("内容"), undefined);
+  assert.ok(walk(h.host).filter((n) => n.className === "library-group-body").every((n) => n.hidden));
+  await h.nav.children[0].emit("click"); assert.equal(h.namedControl("内容").value, longValue);
+  const value = h.namedControl("内容"); value.value = "未保存的新内容\n完整保留"; await value.emit("input");
+  await h.nav.children[1].emit("click"); assert.equal(h.namedControl("内容").value, "第二组正文");
+  assert.equal(walk(h.host).filter((n) => n.className === "library-group-body" && !n.hidden).length, 1);
+  await h.nav.children[0].emit("click"); assert.equal(h.namedControl("内容").value, "未保存的新内容\n完整保留");
+  assert.equal(h.nav.children[0].attrs["aria-expanded"], "true");
+  const toggle = walk(h.host).find((n) => n.className === "library-group-toggle");
+  await toggle.emit("click"); assert.equal(h.namedControl("内容"), undefined);
+  assert.equal(h.nav.children[0].attrs["aria-expanded"], "false");
+});
+test("an invalid field in a collapsed group is automatically revealed for correction", () => {
+  const h = editorHarness(), profile = info(); profile.groups[0].items[0].fields[0].name = "";
+  h.editor.render(profile.groups); assert.equal(h.namedControl("字段名称"), undefined);
+  assert.match(h.editor.validate(), /名称/); assert.ok(h.namedControl("字段名称"));
+  assert.equal(h.nav.children[0].attrs["aria-expanded"], "true");
 });
 function extracted(value, extra = {}) {
   return { groups: [{ name: "银行求职", items: [{ name: "某银行", fields: [{ name: "应聘理由", type: "textarea", value, evidence: value, ...extra }] }] }] };
@@ -163,7 +185,7 @@ for (const file of ["popup.js", "resume-editor.js"]) {
     const text = source(file), before = info(), logs = [], writes = [];
     let preview, aiCalls = 0;
     const state = { activeTemplateId: "a", templates: [{ id: "a", profile: before }] };
-    const context = { schema, activeTemplateId: "a", isResumeDirty: false, isImporting: false,
+    const context = { schema, activeTemplateId: "a", isResumeDirty: false, isImporting: false, isClearingResume: false,
       importResumeBtn: {}, uploadPdfBtn: {}, resumeFormHost: { parentElement: {} }, document: {},
       resumeStorage: { loadTemplateState: async () => plain(state), saveTemplateContent: async (id, value) => writes.push({ id, value }) },
       getActiveModel: async () => ({ id: "model" }), isModelConfigured: () => true,
@@ -179,6 +201,9 @@ for (const file of ["popup.js", "resume-editor.js"]) {
     state.templates[0].profile = plain(before); // before is independent from the returned storage snapshot.
     // Recreate the immutable original because the fixture was intentionally mutated.
     state.templates[0].profile = info();
+    state.templates[0].updatedAt = "cleared-in-another-window";
+    await assert.rejects(preview.onApply([]), /已修改/);
+    delete state.templates[0].updatedAt;
     await preview.onApply(preview.plan.conflicts); assert.equal(writes.length, 1);
     assert.equal(schema.getCatalogWithValues(writes[0].value.profile)[0].value, "新内容");
   });
