@@ -10,7 +10,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
   const SETTINGS_KEY = "resumeSelectionLookupEnabled";
-  const DATA_KEYS = ["resumeTemplates", "activeResumeTemplateId", "resumeMarkdownDocumentsV1", "resumeProfile", "resumeStructured"];
+  const DATA_KEYS = ["resumeTemplates", "activeResumeTemplateId", "resumeProfile", "resumeStructured"];
   const meaningful = (profile) => profile && typeof profile === "object" &&
     Object.values(profile).some((value) => value && (typeof value !== "object" || meaningful(value)));
   async function readSnapshot(storage) {
@@ -19,16 +19,16 @@
     const activeId = data.activeResumeTemplateId;
     if (templates && typeof templates === "object") {
       const entries = Object.entries(templates).filter(([, item]) => item && typeof item === "object");
-      const [id, template] = entries.find(([key, item]) => key === activeId || item.id === activeId) || entries[0] || [];
-      if (template) return { profile: template.profile || {}, markdown: data.resumeMarkdownDocumentsV1?.[template.id || id] || "", templateName: template.name || "当前模板" };
-      return { profile: {}, markdown: "", templateName: "当前模板" };
+      const [, template] = entries.find(([key, item]) => key === activeId || item.id === activeId) || entries[0] || [];
+      if (template) return { profile: template.profile || {}, templateName: template.name || "当前模板" };
+      return { profile: {}, templateName: "当前模板" };
     }
     let profile = data.resumeProfile || data.resumeStructured || {};
     if (!meaningful(profile) && storage.sync?.get) {
       const legacy = await storage.sync.get(["resumeProfile", "resumeStructured"]);
       profile = legacy.resumeProfile || legacy.resumeStructured || profile;
     }
-    return { profile, markdown: data.resumeMarkdownDocumentsV1?.[activeId || "tpl-default"] || "", templateName: "默认简历" };
+    return { profile, templateName: "默认简历" };
   }
   function create({ window: win, document: doc, storage, matcher, schema, overlayFactory, clipboard }) {
     let enabled = false, selection = null, down = null, generation = 0, disposed = false, settingsVersion = 0;
@@ -72,7 +72,7 @@
       try {
         const data = await readSnapshot(storage);
         if (token !== generation || !enabled || disposed || range.startContainer?.isConnected === false) return;
-        const index = matcher.buildIndex(data.profile, schema, data.markdown);
+        const index = matcher.buildIndex(data.profile, schema);
         overlay.show({ text, rect: rectOf(range), templateName: data.templateName,
           candidates: matcher.match(index, text, contextOf(range)), search: (query) => matcher.search(index, query) });
       } catch (_) {

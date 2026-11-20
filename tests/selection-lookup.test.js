@@ -60,35 +60,34 @@ test("project names/descriptions remain distinguishable and copy the full exact 
   assert.equal(matcher.search(index, "项目 B").some((item) => item.copyValue === "项目 B 的完整描述"), true);
 });
 
-test("explicit Markdown fields and tables are searchable without converting or mutating the saved profile", () => {
+test("lookup matches and manual search use fields only, even if Markdown is passed by an old caller", () => {
   const before = JSON.stringify(profile);
-  const markdown = "## 教育经历\n### 硕士\n- 学校名称：甲大学\n- 学历：硕士\n- 开始时间：2023-09\n- 结束时间：2026-06\n## 项目经历\n### 工具项目\n项目名称：工具 A\n项目描述：第一行\n第二行\n## 自我评价\n严谨负责\n保持学习";
+  const markdown = "## 教育经历\n学校名称：Markdown专用大学\n开始时间：2090-01\n结束时间：2094-06\n## 项目经历\n项目名称：Markdown专用项目\n项目描述：Markdown专用描述\n## 自我评价\nMarkdown专用评价";
   const result = matcher.buildIndex(profile, schema, markdown);
+  assert.deepEqual(result, index);
   assert.equal(JSON.stringify(profile), before);
-  assert.deepEqual(matcher.match(result, "就读年月").slice(-2).map((item) => item.copyValue), ["2023-09", "2026-06"]);
-  assert.ok(matcher.match(result, "项目描述").some((item) => item.copyValue === "第一行\n第二行"));
-  assert.ok(matcher.match(result, "自我评价").some((item) => item.copyValue === "严谨负责\n保持学习"));
-  const table = matcher.buildIndex({}, schema, "## 教育经历\n| 学校名称 | 学历 | 开始时间 | 结束时间 |\n| --- | --- | --- | --- |\n| 甲大学 | 硕士 | 2023-09 | 2026-06 |\n| 乙大学 | 本科 | 2019-09 | 2023-06 |");
-  assert.deepEqual(matcher.match(table, "在校时间").map((item) => item.copyValue), ["2023-09", "2026-06", "2019-09", "2023-06"]);
-  assert.equal(matcher.search(matcher.buildIndex({}, schema, "## 其他\n未结构化但可手动搜索的原文"), "手动搜索").length, 1);
-  const range = matcher.buildIndex({}, schema, "## 教育经历\n### 甲大学\n就读年月：2023-09-2026-06");
-  assert.deepEqual(matcher.match(range, "就读年月").map((item) => item.copyValue), ["2023-09", "2026-06"]);
+  assert.ok(result.every((item) => item.format === "字段" && item.id.startsWith("field:")));
+  assert.equal(matcher.search(result, "Markdown专用").length, 0);
+  assert.deepEqual(matcher.match(result, "就读年月").map((item) => item.copyValue), ["2023-09", "2026-06", "2019-09", "2023-06"]);
+  assert.deepEqual(matcher.match(result, "项目描述").map((item) => item.copyValue), [description, "项目 B 的完整描述"]);
 });
 
-test("explicit Markdown labels retain their own sections even without category headings", () => {
-  const found = matcher.buildIndex({}, schema, "# 个人资料\n姓名：Alice\n学校名称：甲大学\n学历：硕士\n开始时间：2023-09\n结束时间：2026-06\n项目名称：项目 A\n项目描述：第一行\n第二行\n自我评价：严谨负责");
-  assert.equal(matcher.match(found, "姓名")[0].copyValue, "Alice");
-  assert.deepEqual(matcher.match(found, "就读年月").map((item) => item.copyValue), ["2023-09", "2026-06"]);
-  assert.equal(matcher.match(found, "项目描述")[0].copyValue, "第一行\n第二行");
-  assert.equal(matcher.match(found, "自我评价")[0].copyValue, "严谨负责");
+test("an empty field library does not fall back to Markdown candidates or Markdown search", () => {
+  const result = matcher.buildIndex({}, schema, "学校名称：Markdown专用大学\n自我评价：Markdown专用评价");
+  assert.deepEqual(result, []);
+  for (const text of ["学校名称", "就读年月", "自我评价"]) assert.deepEqual(matcher.match(result, text), []);
+  assert.deepEqual(matcher.search(result, ""), []);
+  assert.deepEqual(matcher.search(result, "Markdown专用"), []);
 });
 
 test("saved snapshot reads only the active template and never performs storage migrations or writes", async () => {
   const state = { resumeTemplates: { a: { id: "a", name: "模板 A", profile }, b: { id: "b", profile: { personal: { fullName: "Bob" } } } },
     activeResumeTemplateId: "a", resumeMarkdownDocumentsV1: { a: "A markdown", b: "B markdown" }, resumeProfile: { old: "retained" } };
   const before = JSON.stringify(state);
-  const snapshot = await listenerModule.readSnapshot({ local: { get: async () => state, set() { throw new Error("unexpected write"); }, remove() { throw new Error("unexpected cleanup"); } } });
-  assert.equal(snapshot.templateName, "模板 A"); assert.equal(snapshot.markdown, "A markdown");
+  let requestedKeys;
+  const snapshot = await listenerModule.readSnapshot({ local: { get: async (keys) => { requestedKeys = keys; return state; }, set() { throw new Error("unexpected write"); }, remove() { throw new Error("unexpected cleanup"); } } });
+  assert.equal(snapshot.templateName, "模板 A"); assert.equal("markdown" in snapshot, false);
+  assert.equal(requestedKeys.includes("resumeMarkdownDocumentsV1"), false);
   assert.equal(snapshot.profile.personal.fullName, "Alice"); assert.equal(JSON.stringify(state), before);
 });
 

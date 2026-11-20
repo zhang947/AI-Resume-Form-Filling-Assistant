@@ -68,7 +68,7 @@
     if (section === "educations") return [item.school, item.degree].filter(Boolean).join(" · ") || `${fallback} ${index + 1}`;
     return item.name || item.company || item.organization || `${fallback} ${index + 1}`;
   }
-  function buildIndex(profile, schema, markdown = "") {
+  function buildIndex(profile, schema) {
     const items = [];
     for (const section of schema?.sections || []) {
       const records = section.type === "list" ? (Array.isArray(profile?.[section.key]) ? profile[section.key] : []) : [profile?.[section.key]];
@@ -89,13 +89,6 @@
         if (item) items.push(item);
       }
     }
-    const markdownItems = markdownIndex(markdown);
-    // Retain both representations when their source/value differ; suppress exact duplicates only.
-    const seen = new Set(items.map((item) => `${item.section}\0${item.sourceName}\0${item.copyValue}`));
-    for (const item of markdownItems) {
-      const signature = `${item.section}\0${item.sourceName}\0${item.copyValue}`;
-      if (!seen.has(signature)) { items.push(item); seen.add(signature); }
-    }
     return items;
   }
   function match(index, selectedText, context = "") {
@@ -112,99 +105,5 @@
     return index.filter((item) => !query || normalize(`${item.sourceName}\n${item.copyValue}`).includes(query));
   }
 
-  // Only parse explicit headings, key:value fields and tables. Never ask AI or
-  // convert/save Markdown into the structured profile in this read-only feature.
-  function markdownIndex(markdown) {
-    const result = [], stack = [];
-    const labels = { school: "学校名称", degree: "学历层次", name: "项目名称", description: "项目描述",
-      startDate: "开始时间", endDate: "结束时间", selfEvaluation: "自我评价", summary: "个人简介" };
-    let section = "markdown", record = {}, heading = "Markdown 资料", sequence = 0, pending = null;
-    function flushField() {
-      if (pending) { record[pending.key] = pending.value.join("\n"); pending = null; }
-    }
-    function flushRecord() {
-      flushField();
-      const source = sourceName(section, record, sequence, heading);
-      // Time fields are deliberately adjacent, and never combine date ranges.
-      const keys = Object.keys(record).filter((key) => !["startDate", "endDate"].includes(key));
-      keys.push("startDate", "endDate");
-      for (const key of keys) {
-        const item = candidate({ id: `md:${sequence}:${key}`, section, key, label: labels[key] || key,
-          source, value: record[key], format: "Markdown" });
-        if (item) result.push(item);
-      }
-      record = {}; sequence++;
-    }
-    function fieldKey(label) {
-      const rule = ruleFor(label);
-      if (/^(自我评价|自我评估|selfevaluation)$/.test(normalize(label))) return "selfEvaluation";
-      if (rule?.keys.length === 1) return rule.keys[0];
-      if (/^(描述|内容|说明)$/.test(normalize(label))) return "description";
-      return null;
-    }
-    const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i], title = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
-      if (title) {
-        flushRecord();
-        stack[Number(title[1].length) - 1] = title[2]; stack.length = title[1].length;
-        heading = title[2]; section = scopeFor(stack.filter(Boolean).slice().reverse().join(" "))?.[0] || "markdown";
-        // A descriptive heading names a verbatim text block for manual search.
-        if (/自我评价/.test(heading)) { section = "additional"; pending = { key: "selfEvaluation", value: [] }; }
-        else if (/个人简介|自我介绍/.test(heading)) { section = "personal"; pending = { key: "summary", value: [] }; }
-        else {
-          const rule = ruleFor(heading);
-          if (rule?.keys.length === 1 && rule.keys[0] === "description") {
-            if (rule.sections?.length === 1) section = rule.sections[0];
-            pending = { key: "description", value: [] };
-          }
-        }
-        continue;
-      }
-      if (line.includes("|") && /^\s*\|?\s*:?-{3}/.test(lines[i + 1] || "")) {
-        flushRecord();
-        const cells = (row) => row.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
-        const headers = cells(line);
-        const tableScope = headers.map(ruleFor).find((rule) => rule?.sections?.length === 1)?.sections[0];
-        if (tableScope) section = tableScope;
-        i++;
-        while ((lines[i + 1] || "").includes("|")) {
-          const row = cells(lines[++i]);
-          headers.forEach((label, n) => { const key = fieldKey(label); if (key) record[key] = row[n] || ""; });
-          flushRecord();
-        }
-        continue;
-      }
-      const pair = line.match(/^\s*(?:[-+*]\s+)?(?:\*\*)?([^:：\n]{1,30}?)(?:\*\*)?\s*[:：]\s*(.*)$/);
-      if (pair) {
-        const label = pair[1].replace(/\*\*/g, ""), rule = ruleFor(label), key = fieldKey(label);
-        if (key) {
-          flushField();
-          const nextSection = key === "selfEvaluation" ? "additional" : rule?.sections?.length === 1 ? rule.sections[0] : section;
-          if (Object.hasOwn(record, key) || nextSection !== section) flushRecord();
-          section = nextSection;
-          if (["startDate", "endDate"].includes(key)) record[key] = pair[2];
-          else pending = { key, value: [pair[2]] };
-          continue;
-        }
-        if (rule?.keys.length === 2) {
-          flushField();
-          const range = pair[2].match(/^(\d{4}(?:[-/.年]\d{1,2})(?:月|(?:[-/.]\d{1,2}))?)\s*(?:至|到|~|～|—|–|-)\s*(至今|\d{4}(?:[-/.年]\d{1,2})(?:月|(?:[-/.]\d{1,2}))?)$/);
-          if (range) {
-            if (rule.sections && rule.sections[0] !== section) { flushRecord(); section = rule.sections[0]; }
-            record.startDate = range[1]; record.endDate = range[2];
-          }
-          continue;
-        }
-      }
-      if (pending) pending.value.push(line);
-      else if (line.trim()) {
-        const item = candidate({ id: `md:raw:${i}`, section: "markdown", key: "原文", label: "原文", source: heading, value: line, format: "Markdown" });
-        if (item) result.push(item);
-      }
-    }
-    flushRecord();
-    return result;
-  }
-  return Object.freeze({ normalize, ruleFor, buildIndex, match, search, markdownIndex });
+  return Object.freeze({ normalize, ruleFor, buildIndex, match, search });
 });
