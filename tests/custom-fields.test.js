@@ -54,7 +54,7 @@ class Node {
   setAttribute(key, value) { this.attrs[key] = value; }
   addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }
   async emit(type) { for (const fn of this.listeners.get(type) || []) await fn({ target: this }); }
-  scrollIntoView() {}
+  scrollIntoView() { this.scrolled = true; }
 }
 const walk = (node) => [node, ...node.children.flatMap(walk)];
 test("alias preview lets users deselect proposals, cancel without writes and retry a failed save without executing field text", async () => {
@@ -72,11 +72,16 @@ test("alias preview lets users deselect proposals, cancel without writes and ret
   await walk(cancelled).find((n) => n.textContent === '取消').emit('click'); assert.equal(writes, 1); assert.equal(host.children.length, 0);
 });
 function editorHarness() {
-  const host = new Node("div"), nav = new Node("aside"), document = { createElement: (tag) => new Node(tag) };
+  const host = new Node("div"), nav = new Node("aside"), document = { createElement: (tag) => new Node(tag), getElementById: (id) => walk(host).concat(walk(nav)).find((n) => n.id === id) };
   let changes = 0;
   const editor = editorModule.create({ document, host, nav, schema, onChange: () => changes++ });
   const namedControl = (label) => walk(host).filter((node) => node.tagName === "LABEL").find((node) => node.children[0].textContent === label)?.children[1];
-  return { host, nav, editor, namedControl, changes: () => changes };
+  const navGroup = (index) => nav.children[index].children[0].children[1];
+  const navToggle = (index) => nav.children[index].children[0].children[0];
+  const navItem = (groupIndex, itemIndex) => nav.children[groupIndex].children[1].children[itemIndex];
+  const itemBody = (id) => document.getElementById(`library-item-body-${id}`);
+  const itemToggle = (id) => walk(host).find((n) => n.attrs["aria-controls"] === `library-item-body-${id}`);
+  return { host, nav, editor, namedControl, navGroup, navToggle, navItem, itemBody, itemToggle, changes: () => changes };
 }
 test("empty editor can manually build groups, items and fields, preserve newlines and reopen saved data", async () => {
   const h = editorHarness(); h.editor.render([]);
@@ -88,6 +93,8 @@ test("empty editor can manually build groups, items and fields, preserve newline
   await set("内容类型", "textarea", "change"); await set("内容", longValue);
   assert.equal(h.editor.validate(), ""); assert.ok(h.changes() >= 8);
   const saved = plain(h.editor.collect()); const next = editorHarness(); next.editor.render(saved); next.editor.selectGroup(saved[0].id);
+  assert.equal(next.namedControl("内容"), undefined);
+  next.editor.selectItem(saved[0].id, saved[0].items[0].id);
   assert.deepEqual(plain(next.editor.collect()), saved); assert.equal(next.namedControl("内容").value, longValue);
 });
 test("rename/reorder/duplicate/delete/undo at each level keep stable IDs and independent copies", () => {
@@ -103,31 +110,96 @@ test("rename/reorder/duplicate/delete/undo at each level keep stable IDs and ind
 });
 test("names, aliases and values render as text with no HTML execution", () => {
   const h = editorHarness(), profile = profileFor([{ name: "<img onerror=bad()>", aliases: ["<script>bad()</script>"], value: "<script>bad()</script>\n原文", type: "textarea" }]);
-  h.editor.render(profile.groups); h.editor.selectGroup(profile.groups[0].id);
+  h.editor.render(profile.groups); h.editor.selectItem(profile.groups[0].id, profile.groups[0].items[0].id);
   assert.equal(walk(h.host).some((node) => ["IMG", "SCRIPT"].includes(node.tagName)), false);
   assert.equal(h.namedControl("内容").value, "<script>bad()</script>\n原文");
 });
-test("groups start collapsed and selecting a nav entry lazily shows only that group's information", async () => {
+test("groups and items start collapsed; two-level nav reveals one group and preserves drafts across navigation", async () => {
   const h = editorHarness(), a = info().groups[0], b = profileFor([{ name: "第二字段", value: "第二组正文" }], { group: "第二组" }).groups[0];
   b.id = "g-second"; h.editor.render([a, b]);
   assert.equal(walk(h.host).filter((n) => n.className === "library-group-toggle").length, 2);
   assert.equal(h.namedControl("内容"), undefined);
   assert.ok(walk(h.host).filter((n) => n.className === "library-group-body").every((n) => n.hidden));
-  await h.nav.children[0].emit("click"); assert.equal(h.namedControl("内容").value, longValue);
+  await h.navGroup(0).emit("click"); assert.equal(h.namedControl("内容"), undefined);
+  assert.equal(h.nav.children[0].children[1].hidden, false);
+  assert.equal(h.itemBody(a.items[0].id).hidden, true);
+  await h.navItem(0, 0).emit("click"); assert.equal(h.namedControl("内容").value, longValue);
+  assert.equal(h.navItem(0, 0).attrs["aria-current"], "true");
+  assert.equal(walk(h.host).find((n) => n.id === `library-item-${a.items[0].id}`).scrolled, true);
   const value = h.namedControl("内容"); value.value = "未保存的新内容\n完整保留"; await value.emit("input");
-  await h.nav.children[1].emit("click"); assert.equal(h.namedControl("内容").value, "第二组正文");
+  await h.navItem(1, 0).emit("click"); assert.equal(h.namedControl("内容").value, "第二组正文");
   assert.equal(walk(h.host).filter((n) => n.className === "library-group-body" && !n.hidden).length, 1);
-  await h.nav.children[0].emit("click"); assert.equal(h.namedControl("内容").value, "未保存的新内容\n完整保留");
-  assert.equal(h.nav.children[0].attrs["aria-expanded"], "true");
+  await h.navGroup(0).emit("click"); assert.equal(h.namedControl("内容").value, "未保存的新内容\n完整保留");
+  assert.equal(h.navGroup(0).attrs["aria-expanded"], "true");
   const toggle = walk(h.host).find((n) => n.className === "library-group-toggle");
   await toggle.emit("click"); assert.equal(h.namedControl("内容"), undefined);
-  assert.equal(h.nav.children[0].attrs["aria-expanded"], "false");
+  assert.equal(h.navGroup(0).attrs["aria-expanded"], "false");
+  assert.equal(h.nav.children[0].children[1].hidden, true);
 });
 test("an invalid field in a collapsed group is automatically revealed for correction", () => {
   const h = editorHarness(), profile = info(); profile.groups[0].items[0].fields[0].name = "";
   h.editor.render(profile.groups); assert.equal(h.namedControl("字段名称"), undefined);
   assert.match(h.editor.validate(), /名称/); assert.ok(h.namedControl("字段名称"));
-  assert.equal(h.nav.children[0].attrs["aria-expanded"], "true");
+  assert.equal(h.navGroup(0).attrs["aria-expanded"], "true");
+  assert.equal(h.itemBody(profile.groups[0].items[0].id).hidden, false);
+});
+
+test("same-name items fold independently, allow multiple open items and synchronize nav expansion without dirtying data", async () => {
+  const h = editorHarness(), g = info().groups[0];
+  g.items.push(plain(schema.createItem({ name: g.items[0].name, fields: [{ name: "另一字段", value: "另一内容" }] })));
+  h.editor.render([g]);
+  await h.navToggle(0).emit("click");
+  assert.ok(g.items.every((i) => h.itemBody(i.id).hidden));
+  await h.itemToggle(g.items[0].id).emit("click");
+  assert.equal(h.itemBody(g.items[0].id).hidden, false); assert.equal(h.itemBody(g.items[1].id).hidden, true);
+  await h.navItem(0, 1).emit("click");
+  assert.ok(g.items.every((i) => !h.itemBody(i.id).hidden));
+  await h.itemToggle(g.items[0].id).emit("click");
+  assert.equal(h.itemBody(g.items[0].id).hidden, true); assert.equal(h.itemBody(g.items[1].id).hidden, false);
+  assert.equal(h.navItem(0, 0).attrs["aria-expanded"], "false");
+  assert.equal(h.navItem(0, 1).attrs["aria-current"], "true");
+  await h.navToggle(0).emit("click"); assert.equal(h.nav.children[0].children[1].hidden, true);
+  await walk(h.host).find((n) => n.className === "library-group-toggle").emit("click");
+  assert.equal(h.nav.children[0].children[1].hidden, false);
+  assert.equal(h.itemBody(g.items[1].id).hidden, false);
+  assert.equal(h.changes(), 0); assert.deepEqual(plain(h.editor.collect()), [g]);
+});
+
+test("renaming, adding, copying, reordering and deleting items immediately update nav by stable identity", async () => {
+  const h = editorHarness(), g = info().groups[0]; h.editor.render([g]);
+  const iid = h.editor.addItem(g.id);
+  assert.equal(h.itemBody(iid).hidden, false);
+  assert.equal(h.navItem(0, 1).attrs["aria-current"], "true");
+  assert.equal(walk(h.host).find((n) => n.id === `library-item-${iid}`).scrolled, true);
+  const name = h.namedControl("条目名称"); name.value = "新条目名称"; await name.emit("input");
+  assert.match(h.navItem(0, 1).textContent, /新条目名称/); assert.match(h.itemToggle(iid).textContent, /新条目名称/);
+  h.editor.addField(g.id, iid); assert.match(h.navItem(0, 1).textContent, /1 个字段/);
+  h.editor.mutate("duplicate", iid, g.id);
+  const copyId = h.editor.collect()[0].items[2].id;
+  assert.equal(h.itemBody(copyId).hidden, false); assert.match(h.navItem(0, 2).textContent, /副本/);
+  h.editor.mutate("move", copyId, g.id, undefined, -1);
+  assert.equal(h.navItem(0, 1).attrs["aria-controls"], `library-item-body-${copyId}`);
+  h.editor.mutate("remove", copyId, g.id);
+  assert.equal(h.nav.children[0].children[1].children.length, 2);
+  h.editor.undo(); assert.equal(h.itemBody(copyId).hidden, false);
+  assert.equal(h.navItem(0, 1).attrs["aria-current"], "true");
+});
+
+test("collapse preserves edits, refresh defaults closed, and a preserving render retains only valid expanded item IDs", async () => {
+  const h = editorHarness(), g = info().groups[0]; h.editor.render([g]); h.editor.selectItem(g.id, g.items[0].id);
+  const field = h.namedControl("内容"); field.value = "未保存\n完整内容"; await field.emit("input");
+  await h.itemToggle(g.items[0].id).emit("click"); assert.equal(h.namedControl("内容"), undefined);
+  await h.navItem(0, 0).emit("click"); assert.equal(h.namedControl("内容").value, "未保存\n完整内容");
+  const saved = plain(h.editor.collect());
+  h.editor.render(saved, { preserveState: true });
+  assert.equal(h.itemBody(g.items[0].id).hidden, false); assert.equal(h.navItem(0, 0).attrs["aria-current"], "true");
+  const removed = plain(saved); removed[0].items = [];
+  h.editor.render(removed, { preserveState: true }); assert.equal(h.nav.children[0].children[1].children.length, 0);
+  h.editor.render(saved, { preserveState: true }); assert.equal(h.itemBody(g.items[0].id).hidden, true);
+  h.editor.selectItem(g.id, g.items[0].id); h.editor.render(saved);
+  assert.equal(h.navGroup(0).attrs["aria-expanded"], "false");
+  h.editor.selectGroup(g.id); assert.equal(h.itemBody(g.items[0].id).hidden, true);
+  assert.equal(h.editor.collect()[0].items[0].fields[0].value, "未保存\n完整内容");
 });
 function extracted(value, extra = {}) {
   return { groups: [{ name: "银行求职", items: [{ name: "某银行", fields: [{ name: "应聘理由", type: "textarea", value, evidence: value, ...extra }] }] }] };

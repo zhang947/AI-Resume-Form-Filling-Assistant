@@ -77,6 +77,28 @@ function initialLibrary() {
     resumeSelectionLookupEnabled: true,
   };
 }
+
+test('configuration preserves group/item expansion after saving, but resets it when reloading or switching templates', async () => {
+  const h = await startPage('resume-editor.html', initialLibrary());
+  const editor = vm.runInContext('customFieldsEditor', h.context), g = h.state.resumeTemplates.a.profile.groups[0];
+  const all = (node) => [node, ...node.children.flatMap(all)];
+  const itemBody = () => all(h.elements.get('resumeFormHost')).find((n) => n.id === `library-item-body-${g.items[0].id}`);
+  editor.selectItem(g.id, g.items[0].id);
+  assert.equal(itemBody().hidden, false);
+  await h.context.persistResumeProfile();
+  await h.notify({ resumeTemplates: { newValue: h.state.resumeTemplates } });
+  assert.equal(itemBody().hidden, false);
+  await h.elements.get('reloadResumeBtn').emit('click');
+  assert.equal(itemBody(), undefined);
+  editor.selectGroup(g.id); assert.equal(itemBody().hidden, true);
+  editor.selectItem(g.id, g.items[0].id);
+  h.state.activeResumeTemplateId = 'b'; await h.context.loadResumeProfile();
+  assert.equal(all(h.elements.get('resumeFormHost')).some((n) => n.className === 'library-group-body' && !n.hidden), false);
+  // Both templates intentionally use the same IDs: state must not leak by ID.
+  h.state.activeResumeTemplateId = 'a'; await h.context.loadResumeProfile();
+  assert.equal(itemBody(), undefined);
+  editor.selectGroup(g.id); assert.equal(itemBody().hidden, true);
+});
 test('clear button confirms its current-template scope; cancel keeps saved data and unsaved drafts', async () => {
   const h = await startPage('resume-editor.html', initialLibrary()), before = structuredClone(h.state);
   vm.runInContext('customFieldsEditor.addGroup()', h.context);

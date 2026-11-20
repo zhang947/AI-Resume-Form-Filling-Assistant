@@ -21,9 +21,9 @@ body.resume-editor-page {
 /* ─── Header ─────────────────────────────────────────────────────────────── */
 .editor-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
   padding: 20px 24px;
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -36,6 +36,7 @@ body.resume-editor-page {
   align-items: center;
   gap: 16px;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .editor-header .logo-icon {
@@ -58,6 +59,7 @@ body.resume-editor-page {
   line-height: 1.2;
   letter-spacing: -0.025em;
   color: var(--text-main);
+  white-space: nowrap;
 }
 
 .editor-header-copy p {
@@ -68,17 +70,32 @@ body.resume-editor-page {
 
 .editor-toolbar {
   display: flex;
-  gap: 10px;
-  flex-shrink: 0;
+  gap: 12px 20px;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: center;
 }
 
-.editor-toolbar .template-select {
-  width: auto;
-  min-width: 180px;
-  max-width: 260px;
-  flex: 1 1 180px;
+.editor-template-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 320px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.editor-template-picker > span {
+  flex-shrink: 0;
+}
+
+.editor-template-picker .template-select {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
   padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -88,10 +105,65 @@ body.resume-editor-page {
   cursor: pointer;
 }
 
-.editor-toolbar .template-select:focus {
+.editor-template-picker .template-select:focus {
   outline: none;
   border-color: var(--text-main);
   box-shadow: 0 0 0 2px rgba(24, 24, 27, 0.1);
+}
+
+.editor-action-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.editor-save-actions {
+  margin-left: auto;
+}
+
+.editor-toolbar .btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.editor-toolbar .btn-clear-resume {
+  color: #dc2626;
+}
+
+.editor-toolbar .btn-clear-resume:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+.editor-toolbar .btn-save-resume {
+  background: #71717a;
+  border-color: #71717a;
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.editor-toolbar .btn-save-resume:hover:not(:disabled) {
+  background: #52525b;
+  border-color: #52525b;
+}
+
+.editor-toolbar .btn-save-resume:disabled {
+  background: #a1a1aa;
+  border-color: #a1a1aa;
+  color: #ffffff;
+  opacity: 1;
 }
 
 /* ─── Status Bar ─────────────────────────────────────────────────────────── */
@@ -154,6 +226,8 @@ body.resume-editor-page {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
 }
 
 .resume-nav-btn {
@@ -569,16 +643,14 @@ body.resume-editor-page {
     width: 100%;
   }
 
-  .editor-toolbar .btn {
-    flex: 1;
-  }
-
   .resume-editor-layout-wide {
     grid-template-columns: 1fr;
   }
 
   .resume-nav {
     position: static;
+    max-height: none;
+    overflow: visible;
     flex-direction: row;
     flex-wrap: wrap;
     gap: 6px;
@@ -599,6 +671,27 @@ body.resume-editor-page {
 }
 
 @media (max-width: 640px) {
+  .editor-header {
+    padding: 16px;
+  }
+
+  .editor-template-picker {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .editor-toolbar {
+    gap: 12px;
+  }
+
+  .editor-action-group {
+    width: 100%;
+  }
+
+  .editor-save-actions {
+    margin-left: 0;
+  }
+
   .markdown-panel .editor-import-header,
   .markdown-panel .editor-import-body {
     padding: 16px;

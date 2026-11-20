@@ -75,6 +75,7 @@ let isLoadingResume = false;
 let templateNameMode = null;
 const collapsedResumeSections = new Set();
 let customFieldsEditor = null;
+let renderedResumeTemplateId = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
   customFieldsEditor = window.ResumeCustomFieldsEditor.create({ document, host: resumeFormHost, nav: resumeNavEl, schema, onChange: markResumeDirty });
@@ -380,7 +381,7 @@ function resetCollapsedResumeSections() {
   schema.sections.forEach((section) => collapsedResumeSections.add(section.key));
 }
 
-async function loadResumeProfile() {
+async function loadResumeProfile({ resetView = false } = {}) {
   if (isLoadingResume) return;
   isLoadingResume = true;
 
@@ -396,7 +397,7 @@ async function loadResumeProfile() {
     resumeProfile = schema.normalizeResumeProfile(active?.profile || {});
     await markdownEditor.load(activeTemplateId);
     resetCollapsedResumeSections();
-    renderResumeEditor(resumeProfile);
+    renderResumeEditor(resumeProfile, { preserveState: !resetView && renderedResumeTemplateId === activeTemplateId });
     isResumeDirty = false;
     saveResumeBtn.disabled = true;
     updatePageStatus(
@@ -410,10 +411,11 @@ async function loadResumeProfile() {
   }
 }
 
-function renderResumeEditor(profile) {
+function renderResumeEditor(profile, { preserveState = false } = {}) {
   resumeFormHost.innerHTML = "";
   resumeNavEl.innerHTML = "";
-  customFieldsEditor?.render(profile.groups || []);
+  customFieldsEditor?.render(profile.groups || [], { preserveState });
+  renderedResumeTemplateId = activeTemplateId;
 }
 
 function renderResumeNav(sectionStats) {
@@ -777,7 +779,7 @@ saveResumeBtn.addEventListener("click", async () => {
 });
 
 reloadResumeBtn.addEventListener("click", async () => {
-  await loadResumeProfile();
+  await loadResumeProfile({ resetView: true });
   updatePageStatus("info", "已从扩展存储重新加载标准简历。");
 });
 
