@@ -1,14 +1,19 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./selection-lookup-ownership.js") : root.ResumeLookupOwnership);
   if (typeof module === "object" && module.exports) module.exports = api;
   root.ResumeLookupListener = api;
-  if (root.document && root.chrome?.storage && root.ResumeLookupOverlay && !root.__RESUME_LOOKUP_CONTROLLER__) {
+  if (root.document && root.chrome?.storage && root.ResumeLookupOverlay) {
+    const current = root.__RESUME_LOOKUP_CONTROLLER__;
+    if (current?.version === api.VERSION && current.isAlive()) return;
+    try { current?.dispose?.(); } catch (_) { /* legacy invalidated storage listener */ }
     root.__RESUME_LOOKUP_CONTROLLER__ = api.create({ window: root, document: root.document, storage: root.chrome.storage,
       matcher: root.ResumeLookupMatcher, schema: root.ResumeSchema, overlayFactory: root.ResumeLookupOverlay.create,
-      clipboard: root.ResumeLookupClipboard });
+      clipboard: root.ResumeLookupClipboard,
+      isContextValid: () => { try { return Boolean(root.chrome.runtime?.id); } catch (_) { return false; } } });
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (ownership) {
   "use strict";
+  const VERSION = "selection-lookup-single-owner-v2";
   const SETTINGS_KEY = "resumeSelectionLookupEnabled";
   const DATA_KEYS = ["resumeTemplates", "activeResumeTemplateId", "resumeProfile", "resumeStructured"];
   const meaningful = (profile) => profile && typeof profile === "object" &&
@@ -30,9 +35,16 @@
     }
     return { profile, templateName: "默认简历" };
   }
-  function create({ window: win, document: doc, storage, matcher, schema, overlayFactory, clipboard }) {
+  function create({ window: win, document: doc, storage, matcher, schema, overlayFactory, clipboard, isContextValid = () => true }) {
     let enabled = false, selection = null, down = null, generation = 0, disposed = false, settingsVersion = 0;
-    const overlay = overlayFactory({ window: win, document: doc, clipboard, onClose: () => { generation++; selection = null; } });
+    const lease = isContextValid() ? ownership.acquire(doc) : null;
+    const overlay = overlayFactory({ window: win, document: doc, clipboard, isOwner: () => !disposed && Boolean(lease?.isOwner()),
+      onClose: () => { generation++; selection = null; } });
+    function usable() {
+      if (disposed) return false;
+      if (!isContextValid() || !lease?.isOwner()) { dispose(); return false; }
+      return true;
+    }
     const rectOf = (range) => {
       const rect = range.getBoundingClientRect();
       return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, width: rect.width, height: rect.height };
@@ -46,6 +58,7 @@
       return String(heading?.textContent || "").slice(0, 100);
     }
     function onMouseDown(event) {
+      if (!usable()) return;
       if (event.isTrusted === false) return;
       if (!enabled || doc.getElementById?.("ai-resume-fill-selection-overlay")) return;
       if (overlay.containsEvent(event)) { down = null; return; }
@@ -55,6 +68,7 @@
       close();
     }
     async function onMouseUp(event) {
+      if (!usable()) return;
       if (event.isTrusted === false) return;
       if (!enabled || disposed || event.button !== 0 || overlay.containsEvent(event) || !down) return;
       const started = down; down = null;
@@ -71,19 +85,23 @@
       selection = { text, range };
       try {
         const data = await readSnapshot(storage);
-        if (token !== generation || !enabled || disposed || range.startContainer?.isConnected === false) return;
+        if (!usable() || token !== generation || !enabled || range.startContainer?.isConnected === false) return;
         const index = matcher.buildIndex(data.profile, schema);
         overlay.show({ text, rect: rectOf(range), templateName: data.templateName,
           candidates: matcher.match(index, text, contextOf(range)), search: (query) => matcher.search(index, query) });
       } catch (_) {
+        // Reloaded/uninstalled extensions leave listeners whose storage API throws.
+        // Retire those listeners instead of displaying a second error popup.
+        if (ownership.isContextInvalidated(_) || !usable()) { dispose(); return; }
         if (token === generation && enabled && !disposed) {
           try { overlay.show({ text, rect: rectOf(range), candidates: [], templateName: "当前模板", search: () => [], error: "简历资料读取失败，请重新选词重试" }); }
           catch (_) { close(); }
         }
       }
     }
-    function onKeyDown(event) { if (event.key === "Escape") { down = null; close(); } }
+    function onKeyDown(event) { if (usable() && event.key === "Escape") { down = null; close(); } }
     function onViewport() {
+      if (!usable()) return;
       if (!selection || !overlay.isOpen()) return;
       try {
         if (selection.range.startContainer?.isConnected === false) { close(); return; }
@@ -91,6 +109,7 @@
       } catch (_) { close(); }
     }
     function onStorage(changes, area) {
+      if (!usable()) return;
       if (area !== "local" && area !== "sync") return;
       if (area === "local" && changes[SETTINGS_KEY]) {
         settingsVersion++; enabled = changes[SETTINGS_KEY].newValue === true; down = null; close();
@@ -102,13 +121,18 @@
     win.addEventListener("resize", onViewport);
     win.addEventListener("scroll", onViewport, true);
     storage.onChanged.addListener(onStorage);
-    const ready = storage.local.get(SETTINGS_KEY).then((data) => { if (!disposed && settingsVersion === 0) enabled = data[SETTINGS_KEY] === true; }).catch(() => {});
-    return { ready, close, isEnabled: () => enabled,
-      dispose() {
-        disposed = true; close(); overlay.destroy();
-        doc.removeEventListener("mousedown", onMouseDown, true); doc.removeEventListener("mouseup", onMouseUp, true); doc.removeEventListener("keydown", onKeyDown, true);
-        win.removeEventListener("resize", onViewport); win.removeEventListener("scroll", onViewport, true); storage.onChanged.removeListener(onStorage);
-      } };
+    const ready = Promise.resolve().then(() => storage.local.get(SETTINGS_KEY)).then((data) => {
+      if (usable() && settingsVersion === 0) enabled = data[SETTINGS_KEY] === true;
+    }).catch((error) => { if (ownership.isContextInvalidated(error) || !isContextValid()) dispose(); });
+    function dispose() {
+      if (disposed) return;
+      disposed = true; enabled = false; down = null; close(); overlay.destroy(); lease?.release();
+      doc.removeEventListener("mousedown", onMouseDown, true); doc.removeEventListener("mouseup", onMouseUp, true); doc.removeEventListener("keydown", onKeyDown, true);
+      win.removeEventListener("resize", onViewport); win.removeEventListener("scroll", onViewport, true);
+      // An invalidated chrome.storage context may throw even while removing listeners.
+      try { storage.onChanged.removeListener(onStorage); } catch (_) { /* context already gone */ }
+    }
+    return { version: VERSION, ready, close, isEnabled: () => enabled, isAlive: usable, dispose };
   }
-  return Object.freeze({ SETTINGS_KEY, readSnapshot, create });
+  return Object.freeze({ VERSION, SETTINGS_KEY, readSnapshot, create });
 });

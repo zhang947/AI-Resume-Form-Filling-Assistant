@@ -42,9 +42,12 @@ Markdown 编辑和 Markdown＋AI 自动填写功能保持独立。只有内容�
 | `shared/selection-lookup-matcher.js` | 字段索引、关键词与别名、仅字段搜索 |
 | `shared/selection-lookup-overlay.js` | 封闭 Shadow DOM 浮层、来源及预览、展开、复制状态和位置调整 |
 | `shared/selection-lookup-clipboard.js` | Clipboard API 与受控回退复制，恢复原选区和焦点 |
+| `shared/selection-lookup-ownership.js` | 页面级单实例归属及浮层去重，隔离新旧脚本上下文 |
 | `shared/selection-lookup-registration.js` | 设置持久化、可选内容脚本注册、当前标签页接入及失败回滚 |
 
 新功能通过独立的 `resumeSelectionLookupEnabled` 设置键控制。关闭后撤销后续自动注入，并立即关闭已加载页面上的浮层。脚本重复注入不会增加重复监听；切换模板、更新资料或禁用功能会丢弃旧候选和未完成的读取结果。网页脚本模拟的鼠标事件不会触发资料读取。
+
+页面级单实例标记由同一页面上的各个脚本上下文共享，新实例接管后旧实例不再弹框；过期请求和失效扩展上下文会退出，不会额外显示读取失败浮层。升级时同步更新已注册的脚本文件列表。重新加载插件后，请刷新已经打开的招聘网页，以清理修复前版本遗留的监听器和浮层。
 
 ## 验证范围
 

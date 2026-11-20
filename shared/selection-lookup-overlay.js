@@ -1,8 +1,8 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./selection-lookup-ownership.js") : root.ResumeLookupOwnership);
   if (typeof module === "object" && module.exports) module.exports = api;
   root.ResumeLookupOverlay = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (ownership) {
   "use strict";
   function position(anchor, size, viewport) {
     const margin = 8, gap = 8;
@@ -16,8 +16,10 @@
       width,
     };
   }
-  function create({ document: doc = document, window: win = window, clipboard, onClose = () => {} } = {}) {
+  function create({ document: doc = document, window: win = window, clipboard, onClose = () => {}, isOwner = () => true } = {}) {
     const host = doc.createElement("div");
+    host.id = ownership.HOST_ID;
+    host.setAttribute("data-resume-lookup-overlay", "");
     host.style.cssText = "all:initial;position:fixed!important;z-index:2147483647!important;display:none;";
     // The website cannot query resume values from an open shadowRoot.
     const shadow = host.attachShadow({ mode: "closed" });
@@ -111,15 +113,18 @@
     input.addEventListener("input", () => { if (snapshot) render(snapshot.search(input.value), true); });
     return {
       show({ text, rect, candidates, templateName, search, error = "" }) {
+        if (!isOwner()) return false;
+        ownership.removeOverlays(doc, host);
         if (!host.isConnected) (doc.body || doc.documentElement).appendChild(host);
         snapshot = { text, candidates: candidates.slice(), search, error };
         anchor = { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right, width: rect.width };
         title.textContent = `简历资料 · ${templateName || "当前模板"}`; selected.textContent = `选中：${text}`;
         input.value = ""; input.hidden = true;
         host.style.display = "block"; render(snapshot.candidates);
+        return true;
       },
       hide, containsEvent, reposition,
-      isOpen: () => Boolean(snapshot),
+      isOpen: () => Boolean(snapshot && host.isConnected),
       destroy() { hide(); host.remove(); },
     };
   }

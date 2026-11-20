@@ -8,6 +8,7 @@ const clipboard = require("../shared/selection-lookup-clipboard.js");
 const overlayModule = require("../shared/selection-lookup-overlay.js");
 const listenerModule = require("../shared/selection-lookup-listener.js");
 const registration = require("../shared/selection-lookup-registration.js");
+const ownership = require("../shared/selection-lookup-ownership.js");
 const schemaContext = { window: {} };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../shared/resume-schema.js"), "utf8"), schemaContext);
 const schema = schemaContext.window.ResumeSchema;
@@ -134,19 +135,30 @@ class FakeNode {
   contains(target) { return target === this || this.children.some((child) => child.contains(target)); }
 }
 function walk(node) { return [node, ...node.children.flatMap(walk)]; }
+function fakeDocument() {
+  const doc = new FakeNode("document"); doc.isConnected = true;
+  doc.documentElement = new FakeNode("html"); doc.appendChild(doc.documentElement);
+  doc.body = new FakeNode("body"); doc.documentElement.appendChild(doc.body);
+  doc.createElement = (tag) => new FakeNode(tag);
+  doc.getElementById = (id) => walk(doc.documentElement).find((node) => node.id === id) || null;
+  doc.querySelectorAll = (selector) => walk(doc.documentElement).filter((node) =>
+    (selector.includes("[data-resume-lookup-overlay]") && Object.hasOwn(node.attrs, "data-resume-lookup-overlay")) ||
+    (selector.includes(`#${ownership.HOST_ID}`) && node.id === ownership.HOST_ID));
+  return doc;
+}
 function overlayHarness(copyResults = [true]) {
   const roots = [], copies = [], timers = new Map(); let nextTimer = 0;
-  const body = new FakeNode("body"); body.isConnected = true;
-  const doc = { body, createElement(tag) {
+  const doc = fakeDocument(), body = doc.body;
+  doc.createElement = (tag) => {
     const node = new FakeNode(tag);
     node.attachShadow = (options) => { assert.equal(options.mode, "closed"); const root = new FakeNode("shadow"); roots.push(root); return root; };
     return node;
-  } };
+  };
   const win = { innerWidth: 1000, innerHeight: 800, navigator: {}, setTimeout: (fn) => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: (id) => timers.delete(id) };
   const overlay = overlayModule.create({ document: doc, window: win, clipboard: { copy: async (value) => { copies.push(value); return copyResults.shift() ?? true; } } });
   const all = () => roots.flatMap(walk), find = (className) => all().filter((node) => node.className === className);
   const show = (candidates = matcher.match(index, "项目描述")) => overlay.show({ text: "项目描述", rect: { top: 600, bottom: 620, left: 300, right: 380, width: 80 }, candidates, templateName: "模板 A", search: (query) => matcher.search(index, query) });
-  return { overlay, copies, timers, body, find, all, show, win };
+  return { overlay, copies, timers, body, find, all, show, win, doc };
 }
 
 test("candidate overlay keeps its snapshot open after copy, preserves full text, and allows another copy", async () => {
@@ -199,8 +211,8 @@ function signal() {
   return { addListener: (fn) => listeners.add(fn), removeListener: (fn) => listeners.delete(fn),
     emit: (...args) => Promise.all([...listeners].map((fn) => fn(...args))), listeners };
 }
-function listenerHarness(initialEnabled = true) {
-  const doc = new FakeNode("document"), win = new FakeNode("window"), onChanged = signal();
+function listenerHarness(initialEnabled = true, { doc = fakeDocument(), isContextValid = () => true } = {}) {
+  const win = new FakeNode("window"), onChanged = signal();
   let selected = "", collapsed = false, section = "", dataReads = 0;
   const data = { resumeTemplates: { a: { id: "a", name: "模板 A", profile } }, activeResumeTemplateId: "a" };
   const getData = { current: async () => data };
@@ -214,7 +226,7 @@ function listenerHarness(initialEnabled = true) {
   const shown = [], moved = [], view = { open: false, show(args) { this.open = true; shown.push(args); }, hide() { this.open = false; },
     containsEvent: (event) => event.inOverlay === true, reposition: (rect) => moved.push(rect), isOpen() { return this.open; }, destroy() {} };
   const controller = listenerModule.create({ window: win, document: doc, storage, matcher, schema, clipboard,
-    overlayFactory: () => view });
+    overlayFactory: () => view, isContextValid });
   async function select(text, context = "") {
     await doc.emit("mousedown", { button: 0, clientX: 0, clientY: 0 });
     selected = text; section = context;
@@ -275,24 +287,137 @@ test("webpage-generated synthetic selection gestures do not read resume data", a
 });
 
 test("registered script bundle boots idempotently alongside the original content-script globals", async () => {
-  const roots = [], storageChanges = signal(), doc = new FakeNode("document"), win = new FakeNode("window");
-  doc.body = new FakeNode("body"); doc.body.isConnected = true;
+  const roots = [], storageChanges = signal(), doc = fakeDocument(), win = new FakeNode("window");
   doc.createElement = (tag) => {
     const node = new FakeNode(tag); node.attachShadow = () => { const shadow = new FakeNode("shadow"); roots.push(shadow); return shadow; }; return node;
   };
   const context = { document: doc, console, navigator: {}, __AI_RESUME_AUTOFILL_LOADED__: true,
     addEventListener: win.addEventListener.bind(win), removeEventListener: win.removeEventListener.bind(win),
-    chrome: { storage: { onChanged: storageChanges, local: { get: async () => ({}) } } } };
+    chrome: { runtime: { id: "test-extension" }, storage: { onChanged: storageChanges, local: { get: async () => ({}) } } } };
   context.window = context; vm.createContext(context);
   for (const file of registration.FILES) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), context);
   const controller = context.__RESUME_LOOKUP_CONTROLLER__; await controller.ready;
-  assert.equal(controller.isEnabled(), false); assert.equal(doc.children.length, 0);
+  assert.equal(controller.isEnabled(), false); assert.equal(doc.body.children.length, 0);
   assert.equal(storageChanges.listeners.size, 1);
   for (const file of registration.FILES) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), context);
   assert.equal(context.__RESUME_LOOKUP_CONTROLLER__, controller);
   assert.equal(storageChanges.listeners.size, 1); assert.equal(roots.length, 1);
   assert.equal(context.__AI_RESUME_AUTOFILL_LOADED__, true);
   controller.dispose();
+});
+
+test("document ownership spans script contexts and stale cleanup cannot release a newer owner", () => {
+  const doc = fakeDocument();
+  const first = ownership.acquire(doc);
+  assert.equal(first.isOwner(), true);
+  const second = ownership.acquire(doc);
+  assert.equal(first.isOwner(), false); assert.equal(second.isOwner(), true);
+  first.release(); assert.equal(second.isOwner(), true);
+  assert.equal(walk(doc.documentElement).filter((node) => node.id === ownership.OWNER_ID).length, 1);
+  second.release(); assert.equal(doc.getElementById(ownership.OWNER_ID), null);
+});
+
+test("multiple overlay instances leave at most one visible host and stale owners cannot reshow it", () => {
+  const h = overlayHarness();
+  const firstLease = ownership.acquire(h.doc);
+  const first = overlayModule.create({ document: h.doc, window: h.win, clipboard, isOwner: firstLease.isOwner });
+  const data = { text: "学校名称", rect: { top: 500, bottom: 520, left: 100, right: 180, width: 80 },
+    candidates: matcher.match(index, "学校名称"), templateName: "旧模板", search: () => [] };
+  first.show(data); assert.equal(h.doc.querySelectorAll(`#${ownership.HOST_ID}`).length, 1);
+  const secondLease = ownership.acquire(h.doc);
+  const second = overlayModule.create({ document: h.doc, window: h.win, clipboard, isOwner: secondLease.isOwner });
+  second.show({ ...data, templateName: "当前模板" });
+  assert.equal(first.show({ ...data, error: "简历资料读取失败" }), false);
+  assert.equal(h.doc.querySelectorAll(`#${ownership.HOST_ID}`).length, 1);
+  assert.equal(first.isOpen(), false); assert.equal(second.isOpen(), true);
+  first.destroy(); firstLease.release(); assert.equal(second.isOpen(), true); assert.equal(secondLease.isOwner(), true);
+});
+
+test("a late result from an obsolete controller cannot display a second error or overwrite the current candidates", async () => {
+  const first = listenerHarness(); await first.controller.ready;
+  let reject;
+  first.getData.current = () => new Promise((_resolve, fail) => { reject = fail; });
+  const pending = first.select("学校名称"); await new Promise((done) => setImmediate(done));
+  const second = listenerHarness(true, { doc: first.doc }); await second.controller.ready;
+  await second.select("学校名称");
+  reject(new Error("Extension context invalidated.")); await pending;
+  assert.equal(first.shown.length, 0); assert.equal(first.controller.isAlive(), false);
+  assert.equal(first.storage.onChanged.listeners.size, 0);
+  assert.equal(second.shown.length, 1); assert.equal(second.view.open, true);
+  assert.equal(second.shown[0].candidates[0].copyValue, "XX大学");
+  assert.equal(second.controller.isAlive(), true);
+});
+
+test("invalidated storage contexts retire their listeners instead of opening a read-error popup", async () => {
+  const h = listenerHarness(); await h.controller.ready;
+  h.getData.current = async () => { throw new Error("Extension context invalidated."); };
+  await h.select("学校名称");
+  assert.equal(h.shown.length, 0); assert.equal(h.controller.isAlive(), false);
+  assert.equal(h.view.open, false); assert.equal(h.storage.onChanged.listeners.size, 0);
+  assert.equal(h.doc.getElementById(ownership.OWNER_ID), null);
+});
+
+test("ordinary read errors still allow retry in the one current controller", async () => {
+  const h = listenerHarness(); await h.controller.ready;
+  h.getData.current = async () => { throw new Error("Storage temporarily unavailable"); };
+  await h.select("学校名称");
+  assert.match(h.shown[0].error, /读取失败/); assert.equal(h.controller.isAlive(), true);
+  h.getData.current = async () => ({ resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" });
+  await h.select("学校名称");
+  assert.equal(h.shown.at(-1).candidates.length, 3); assert.equal(h.controller.isAlive(), true);
+});
+
+function lookupWorld(doc, { getData = async () => ({ resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" }) } = {}) {
+  const storageChanges = signal(), win = new FakeNode("window"); let valid = true;
+  doc.createElement = (tag) => {
+    const node = new FakeNode(tag); node.attachShadow = () => new FakeNode("shadow"); return node;
+  };
+  const context = { document: doc, console, navigator: {}, innerWidth: 1000, innerHeight: 800, setTimeout, clearTimeout,
+    addEventListener: win.addEventListener.bind(win), removeEventListener: win.removeEventListener.bind(win),
+    chrome: { runtime: { get id() { return valid ? "test-extension" : undefined; } }, storage: { onChanged: storageChanges, local: { get: async (keys) => {
+      if (!valid) throw new Error("Extension context invalidated.");
+      return typeof keys === "string" ? { [keys]: true } : getData();
+    } } } } };
+  context.window = context; vm.createContext(context);
+  for (const file of registration.FILES) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", file), "utf8"), context);
+  return { context, changes: storageChanges, controller: context.__RESUME_LOOKUP_CONTROLLER__, invalidate: () => { valid = false; } };
+}
+
+test("two isolated script worlds sharing a page cannot reproduce the error popup plus candidate popup", async () => {
+  const doc = fakeDocument(); let selected = "", rejectOld;
+  const range = { startContainer: { isConnected: true, parentElement: { closest: () => null } }, cloneRange() { return this; },
+    getBoundingClientRect: () => ({ top: 500, bottom: 520, left: 100, right: 180, width: 80 }) };
+  doc.getSelection = () => ({ isCollapsed: !selected, rangeCount: 1, toString: () => selected, getRangeAt: () => range });
+  async function select() {
+    await doc.emit("mousedown", { button: 0, clientX: 0, clientY: 0, isTrusted: true }); selected = "学校名称";
+    await doc.emit("mouseup", { button: 0, clientX: 100, clientY: 0, isTrusted: true });
+  }
+  const old = lookupWorld(doc, { getData: () => new Promise((_resolve, reject) => { rejectOld = reject; }) });
+  await old.controller.ready;
+  const pending = select(); await new Promise((done) => setImmediate(done));
+  const current = lookupWorld(doc); await current.controller.ready;
+  await select();
+  assert.equal(doc.querySelectorAll(`#${ownership.HOST_ID}`).length, 1);
+  old.invalidate(); rejectOld(new Error("Extension context invalidated.")); await pending;
+  assert.equal(doc.querySelectorAll(`#${ownership.HOST_ID}`).length, 1);
+  assert.equal(old.controller.isAlive(), false); assert.equal(current.controller.isAlive(), true);
+  assert.equal(current.changes.listeners.size, 1); assert.equal(old.changes.listeners.size, 0);
+  current.controller.dispose();
+});
+
+test("reinjection replaces a legacy controller, while a dead context cannot steal the active document lease", async () => {
+  const doc = fakeDocument(), current = lookupWorld(doc); await current.controller.ready;
+  const activeMarker = doc.getElementById(ownership.OWNER_ID);
+  const dead = listenerHarness(true, { doc, isContextValid: () => false }); await dead.controller.ready;
+  assert.equal(doc.getElementById(ownership.OWNER_ID), activeMarker);
+  assert.equal(current.controller.isAlive(), true); assert.equal(dead.controller.isAlive(), false);
+  let disposed = 0;
+  current.context.__RESUME_LOOKUP_CONTROLLER__ = { version: "legacy", dispose() { disposed++; current.controller.dispose(); throw new Error("Extension context invalidated."); } };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "../shared/selection-lookup-listener.js"), "utf8"), current.context);
+  const replacement = current.context.__RESUME_LOOKUP_CONTROLLER__; await replacement.ready;
+  assert.equal(disposed, 1); assert.notEqual(replacement, current.controller);
+  assert.equal(replacement.isAlive(), true); assert.equal(current.changes.listeners.size, 1);
+  replacement.dispose();
 });
 
 test("registration is opt-in, persists for future pages, handles current tabs, and unregisters on disable", async () => {
@@ -327,6 +452,22 @@ test("failed registration rolls back the opt-in setting and reports failure to t
   const manager = registration.install(chrome); await manager.sync(false);
   const response = await new Promise((resolve) => [...onMessage.listeners][0]({ action: "setSelectionLookupEnabled", enabled: true }, { id: "extension" }, resolve));
   assert.equal(response.success, false); assert.equal(values[registration.SETTINGS_KEY], false);
+});
+
+test("persisted registrations from an older version are updated before injecting the current bundle", async () => {
+  const calls = [], oldFiles = registration.FILES.filter((file) => !file.endsWith("selection-lookup-ownership.js"));
+  let files = oldFiles;
+  const chrome = { storage: { onChanged: signal(), local: { get: async (key) => ({ [key]: true }) } },
+    runtime: { id: "extension", onMessage: signal(), onInstalled: signal() }, tabs: { query: async () => [{ id: 1, url: "https://example.test" }] },
+    scripting: {
+      getRegisteredContentScripts: async () => [{ id: registration.SCRIPT_ID, js: files }],
+      registerContentScripts: async () => { throw new Error("must update an existing registration"); },
+      updateContentScripts: async ([update]) => { calls.push("update"); files = update.js; },
+      executeScript: async (request) => { calls.push("inject"); assert.deepEqual(request.files, registration.FILES); },
+    } };
+  const manager = registration.install(chrome); await manager.sync();
+  assert.deepEqual(calls, ["update", "inject"]); assert.deepEqual(files, registration.FILES);
+  await manager.sync(false); assert.deepEqual(calls, ["update", "inject"]);
 });
 
 test("settings checkbox defaults off, persists an explicit opt-in, and recovers after a failed change", async () => {

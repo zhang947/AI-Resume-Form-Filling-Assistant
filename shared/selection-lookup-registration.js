@@ -5,7 +5,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
   const SETTINGS_KEY = "resumeSelectionLookupEnabled", SCRIPT_ID = "resume-selection-lookup-v1";
-  const FILES = ["shared/resume-schema.js", "shared/selection-lookup-matcher.js", "shared/selection-lookup-clipboard.js",
+  const FILES = ["shared/resume-schema.js", "shared/selection-lookup-matcher.js", "shared/selection-lookup-clipboard.js", "shared/selection-lookup-ownership.js",
     "shared/selection-lookup-overlay.js", "shared/selection-lookup-listener.js"];
   function install(chrome) {
     if (!chrome.storage?.local || !chrome.scripting?.registerContentScripts) return null;
@@ -17,6 +17,9 @@
         if (enabled && !registered.length) await chrome.scripting.registerContentScripts([{
           id: SCRIPT_ID, matches: ["http://*/*", "https://*/*"], js: FILES, runAt: "document_idle", persistAcrossSessions: true,
         }]);
+        if (enabled && registered.length && JSON.stringify(registered[0].js) !== JSON.stringify(FILES)) {
+          await chrome.scripting.updateContentScripts([{ id: SCRIPT_ID, js: FILES }]);
+        }
         if (!enabled && registered.length) await chrome.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
         if (enabled && inject) {
           const tabs = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
