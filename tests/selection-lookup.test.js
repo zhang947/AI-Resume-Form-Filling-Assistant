@@ -13,7 +13,7 @@ const schemaContext = { window: {} };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../shared/resume-schema.js"), "utf8"), schemaContext);
 const schema = schemaContext.window.ResumeSchema;
 const description = "第一行：分析用户反馈。\n\n第二行：复核数据。\n" + "项目长描述".repeat(60);
-const profile = {
+const oldFixture = {
   personal: { fullName: "Alice", summary: "保存的个人简介" },
   educations: [
     { school: "XX大学", degree: "硕士", startDate: "2023-09", endDate: "2026-06" },
@@ -28,12 +28,23 @@ const profile = {
   internships: [{ company: "公司 A", startDate: "2025-07", endDate: "2025-09", description: "实习内容" }],
   additional: { selfEvaluation: "保存的自我评价\n保持换行。" },
 };
+// Test fixture adapts historical sample content to the dynamic library. Production
+// does not migrate it: users explicitly re-enter/parse their own information.
+const labels = { school: "学校名称", degree: "学历", startDate: "开始时间", endDate: "结束时间", name: "项目名称", description: "项目说明", summary: "自我评价", selfEvaluation: "自我评价", fullName: "姓名" };
+const names = { personal: "个人资料", educations: "教育经历", projects: "项目经历", internships: "实习经历", additional: "其他资料" };
+const profile = schema.normalizeResumeProfile({ groups: Object.entries(oldFixture).map(([group, records]) => ({
+  name: names[group], items: (Array.isArray(records) ? records : [records]).map((record) => ({
+    name: [record.school, record.degree].filter(Boolean).join(" · ") || record.name || record.company || names[group],
+    fields: Object.entries(record).map(([name, value]) => ({ name: labels[name] || name, value, type: /Date$/.test(name) ? "date" : /description|Evaluation|summary/.test(name) ? "textarea" : "text",
+      role: name === "startDate" ? "start" : name === "endDate" ? "end" : "", aliases: name === "description" ? [group === "projects" ? "项目描述" : "实习内容"] : [] })),
+  })),
+})) });
 const index = matcher.buildIndex(profile, schema);
 
 test("selection aliases clean required markers and pair each education's start/end as separate values", () => {
   const found = matcher.match(index, "  * 就读年月：（必填） ");
   assert.deepEqual(found.map((item) => item.copyValue), ["2023-09", "2026-06", "2019-09", "2023-06"]);
-  assert.deepEqual(found.map((item) => item.sourceName), ["XX大学 · 硕士 · 开始时间", "XX大学 · 硕士 · 结束时间", "YY大学 · 本科 · 开始时间", "YY大学 · 本科 · 结束时间"]);
+  assert.deepEqual(found.map((item) => item.sourceName), ["教育经历 · XX大学 · 硕士 · 开始时间", "教育经历 · XX大学 · 硕士 · 结束时间", "教育经历 · YY大学 · 本科 · 开始时间", "教育经历 · YY大学 · 本科 · 结束时间"]);
   assert.equal(new Set(found.map((item) => item.id)).size, 4);
 });
 
@@ -51,12 +62,12 @@ test("generic start/end labels never mix dates; recorded 至今 is retained and 
 test("project names/descriptions remain distinguishable and copy the full exact text with newlines", () => {
   const found = matcher.match(index, "项目描述");
   assert.equal(found.length, 2);
-  assert.equal(found[0].sourceName, "项目 A · 项目说明");
+  assert.equal(found[0].sourceName, "项目经历 · 项目 A · 项目说明");
   assert.equal(found[0].copyValue, description);
   assert.ok(found[0].preview.length < found[0].copyValue.length);
-  assert.equal(found[1].sourceName, "项目 B · 项目说明");
+  assert.equal(found[1].sourceName, "项目经历 · 项目 B · 项目说明");
   assert.deepEqual(matcher.match(index, "毕业院校").map((item) => item.copyValue), ["XX大学", "YY大学", "ZZ学校"]);
-  assert.deepEqual(matcher.match(index, "自我评价").map((item) => item.copyValue), [profile.personal.summary, profile.additional.selfEvaluation]);
+  assert.deepEqual(matcher.match(index, "自我评价").map((item) => item.copyValue), [oldFixture.personal.summary, oldFixture.additional.selfEvaluation]);
   assert.deepEqual(matcher.match(index, "不存在的字段"), []);
   assert.equal(matcher.search(index, "项目 B").some((item) => item.copyValue === "项目 B 的完整描述"), true);
 });
@@ -82,14 +93,14 @@ test("an empty field library does not fall back to Markdown candidates or Markdo
 });
 
 test("saved snapshot reads only the active template and never performs storage migrations or writes", async () => {
-  const state = { resumeTemplates: { a: { id: "a", name: "模板 A", profile }, b: { id: "b", profile: { personal: { fullName: "Bob" } } } },
+  const state = { resumeLibraryVersion: 1, resumeTemplates: { a: { id: "a", name: "模板 A", profile }, b: { id: "b", profile: { personal: { fullName: "Bob" } } } },
     activeResumeTemplateId: "a", resumeMarkdownDocumentsV1: { a: "A markdown", b: "B markdown" }, resumeProfile: { old: "retained" } };
   const before = JSON.stringify(state);
   let requestedKeys;
   const snapshot = await listenerModule.readSnapshot({ local: { get: async (keys) => { requestedKeys = keys; return state; }, set() { throw new Error("unexpected write"); }, remove() { throw new Error("unexpected cleanup"); } } });
   assert.equal(snapshot.templateName, "模板 A"); assert.equal("markdown" in snapshot, false);
   assert.equal(requestedKeys.includes("resumeMarkdownDocumentsV1"), false);
-  assert.equal(snapshot.profile.personal.fullName, "Alice"); assert.equal(JSON.stringify(state), before);
+  assert.equal(schema.getCatalogWithValues(snapshot.profile).find((f) => f.label === "姓名").value, "Alice"); assert.equal(JSON.stringify(state), before);
 });
 
 test("clipboard writes only the candidate value and preserves exact long text", async () => {
@@ -214,7 +225,7 @@ function signal() {
 function listenerHarness(initialEnabled = true, { doc = fakeDocument(), isContextValid = () => true } = {}) {
   const win = new FakeNode("window"), onChanged = signal();
   let selected = "", collapsed = false, section = "", dataReads = 0;
-  const data = { resumeTemplates: { a: { id: "a", name: "模板 A", profile } }, activeResumeTemplateId: "a" };
+  const data = { resumeLibraryVersion: 1, resumeTemplates: { a: { id: "a", name: "模板 A", profile } }, activeResumeTemplateId: "a" };
   const getData = { current: async () => data };
   const storage = { onChanged, local: { get: async (keys) => {
     if (keys === listenerModule.SETTINGS_KEY) return { [keys]: initialEnabled };
@@ -270,9 +281,9 @@ test("late old selection results cannot replace the newest selection, and templa
   let release;
   h.getData.current = () => new Promise((resolve) => { release = resolve; });
   const first = h.select("就读年月"); await new Promise((done) => setImmediate(done));
-  h.getData.current = async () => ({ resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" });
+  h.getData.current = async () => ({ resumeLibraryVersion: 1, resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" });
   await h.select("项目描述");
-  release({ resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" }); await first;
+  release({ resumeLibraryVersion: 1, resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" }); await first;
   assert.equal(h.shown.length, 1); assert.equal(h.shown[0].text, "项目描述");
   await h.storage.onChanged.emit({ activeResumeTemplateId: { newValue: "b" } }, "local");
   assert.equal(h.view.open, false);
@@ -362,12 +373,12 @@ test("ordinary read errors still allow retry in the one current controller", asy
   h.getData.current = async () => { throw new Error("Storage temporarily unavailable"); };
   await h.select("学校名称");
   assert.match(h.shown[0].error, /读取失败/); assert.equal(h.controller.isAlive(), true);
-  h.getData.current = async () => ({ resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" });
+  h.getData.current = async () => ({ resumeLibraryVersion: 1, resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" });
   await h.select("学校名称");
   assert.equal(h.shown.at(-1).candidates.length, 3); assert.equal(h.controller.isAlive(), true);
 });
 
-function lookupWorld(doc, { getData = async () => ({ resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" }) } = {}) {
+function lookupWorld(doc, { getData = async () => ({ resumeLibraryVersion: 1, resumeTemplates: { a: { profile } }, activeResumeTemplateId: "a" }) } = {}) {
   const storageChanges = signal(), win = new FakeNode("window"); let valid = true;
   doc.createElement = (tag) => {
     const node = new FakeNode(tag); node.attachShadow = () => new FakeNode("shadow"); return node;

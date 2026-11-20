@@ -11,7 +11,7 @@
   function () {
     "use strict";
 
-    const CONTENT_SCRIPT_VERSION = "2026-11-20-custom-fields-v7";
+    const CONTENT_SCRIPT_VERSION = "2026-11-20-dynamic-library-v8";
 
     function contentScriptHasDiagnosticsSupport(status) {
       return Boolean(

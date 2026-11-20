@@ -585,7 +585,7 @@
   }
 
   function deepScanButtonMatchesProfile(el, resumeProfile) {
-    if (!resumeProfile) return true;
+    if (!resumeProfile || Array.isArray(resumeProfile.groups)) return true;
     const text = getDeepScanText(el);
     const matchedSections = DEEP_SCAN_SECTION_MAP.filter((entry) =>
       entry.patterns.some((pattern) => text.includes(normalizeDeepScanText(pattern)))

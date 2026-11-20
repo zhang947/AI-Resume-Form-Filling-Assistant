@@ -46,14 +46,14 @@
       <main class="app-content">
         <div class="tabs" id="tabs">
           <button class="tab active" data-tab="fill">自动填充</button>
-          <button class="tab" data-tab="resume">标准简历</button>
+          <button class="tab" data-tab="resume">资料库</button>
         </div>
 
         <section class="tab-panel active" id="tab-fill">
           <div class="template-bar">
             <label for="fillMethod">填写方式</label>
             <select id="fillMethod" class="template-select">
-              <option value="fields" selected>原有固定字段模式（默认）</option>
+              <option value="fields" selected>资料字段模式（默认）</option>
               <option value="markdown">Markdown＋AI 模式</option>
             </select>
           </div>
@@ -127,13 +127,13 @@
               <button class="btn btn-outline btn-sm" id="importTemplatesBtn" title="从 JSON 备份导入（覆盖当前模板）">导入</button>
             </div>
             <div class="template-manager-row">
-              <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前标准简历 JSON">导出当前简历</button>
-              <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入标准简历 JSON 到当前模板">导入当前简历</button>
+              <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前资料库 JSON">导出当前简历</button>
+              <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入资料库 JSON 到当前模板">导入当前简历</button>
             </div>
             <input type="file" id="importTemplatesFile" accept="application/json" hidden />
             <input type="file" id="importResumeJsonFile" accept="application/json" hidden />
             <div class="tip">
-              每个模板是一份独立的标准简历。基础信息相近时，可“复制当前”后只改侧重点（如测开 / 游戏开发 / 普通开发）。填充前在上方“自动填充”页切换模板即可。
+              每个模板是一份独立的资料库。基础信息相近时，可“复制当前”后只改侧重点（如测开 / 游戏开发 / 普通开发）。填充前在上方“自动填充”页切换模板即可。
             </div>
           </div>
 
@@ -142,7 +142,7 @@
               <span>简历配置</span>
             </div>
             <div class="tip">
-              简历字段较多，推荐在独立网页里编辑。新页面会复用当前扩展里的同一份标准简历数据。
+              简历字段较多，推荐在独立网页里编辑。新页面会复用当前扩展里的同一份资料库数据。
             </div>
             <div class="resume-launch-card">
               <div class="resume-launch-copy">
@@ -153,7 +153,7 @@
               </div>
               <button class="btn btn-primary" id="openResumeEditorBtn">打开简历配置页</button>
             </div>
-            <p class="tip">固定字段和自定义信息均可在“简历配置页”中编辑与保存。</p>
+            <p class="tip">分组、条目和字段均由你自行添加；也可用下方 Markdown 解析生成后保存。</p>
             <div class="resume-summary-grid" id="resumeSummaryGrid"></div>
           </div>
 
@@ -168,15 +168,10 @@
               <button id="reloadMarkdownBtn" class="btn btn-outline">重新加载</button>
               <button id="importMarkdownBtn" class="btn btn-outline">导入 .md</button>
               <button id="exportMarkdownBtn" class="btn btn-outline">导出 .md</button>
-              <button id="convertMarkdownBtn" class="btn btn-outline">AI 转为字段（预览）</button>
+              <button id="convertMarkdownBtn" class="btn btn-outline">AI 解析并添加信息（预览）</button>
             </div>
             <input type="file" id="importMarkdownFile" accept=".md,.markdown,.txt,text/markdown,text/plain" hidden />
-            <div id="markdownConversion" hidden>
-              <p class="tip">以下为 AI 转换预览。请核对，点击确认后才会替换当前模板字段；原 Markdown 保留。</p>
-              <textarea id="markdownFieldsPreview" class="textarea" rows="12" readonly aria-label="转换字段预览"></textarea>
-              <button id="applyMarkdownFieldsBtn" class="btn btn-primary">确认替换当前模板字段</button>
-              <button id="cancelMarkdownFieldsBtn" class="btn btn-outline">取消转换</button>
-            </div>
+
           </div>
           <div class="resume-sidepanel-legacy" hidden>
             <div class="section-block">
@@ -187,14 +182,14 @@
                 </div>
               </div>
               <div class="tip">
-                主流程以这份标准简历为准。请尽量填写完整，尤其是基本信息、工作经历、教育经历和求职偏好。
+                主流程以这份资料库为准。请尽量填写完整，尤其是基本信息、工作经历、教育经历和求职偏好。
               </div>
               <div class="resume-editor-layout">
                 <aside class="resume-nav" id="resumeNav"></aside>
                 <div class="resume-form-host" id="resumeFormHost"></div>
               </div>
               <div class="action-row">
-                <button class="btn btn-primary" id="saveResumeBtn">保存标准简历</button>
+                <button class="btn btn-primary" id="saveResumeBtn">保存资料</button>
               </div>
             </div>
 
@@ -214,7 +209,7 @@
                 ></textarea>
               </div>
               <div class="action-row">
-                <button class="btn btn-primary" id="importResumeBtn">AI 导入到标准简历</button>
+                <button class="btn btn-primary" id="importResumeBtn">AI 解析并添加信息</button>
                 <button class="btn btn-outline" id="uploadPdfBtn">上传 PDF 并导入</button>
               </div>
               <input type="file" id="resumePdfFile" accept="application/pdf" hidden />
@@ -237,7 +232,7 @@
             <div class="log-item log-info">
               <span class="log-time">--:--</span>
               <span class="log-msg">
-                先在“标准简历”里填写或导入资料，再到“自动填充”执行映射和填表。
+                先在“资料库”里填写或导入资料，再到“自动填充”执行映射和填表。
               </span>
             </div>
           </div>
@@ -423,6 +418,7 @@
     <script src="shared/markdown-editor.js"></script>
     <script src="shared/selection-lookup-registration.js"></script>
     <script src="shared/custom-fields-editor.js"></script>
+    <script src="shared/library-import.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

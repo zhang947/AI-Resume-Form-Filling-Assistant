@@ -1,3 +1,5 @@
+importScripts("shared/resume-storage.js");
+globalThis.ResumeStorage?.loadTemplateState().catch((error) => console.error("[library-init]", error));
 // Background Service Worker
 // 统一代理调用 OpenAI 兼容接口（如 DeepSeek），避免侧边栏/内容脚本的 CORS 问题。
 
@@ -23,7 +25,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   callAI(request.modelId, request.prompt, mode)
     .then((response) => sendResponse({ success: true, data: response }))
     .catch((error) =>
-      sendResponse({ success: false, error: error?.message || String(error) })
+      sendResponse({ success: false, error: error?.message || String(error), code: error?.code })
     );
 
   return true; // 保持消息通道，用于异步响应
@@ -50,27 +52,18 @@ async function callAI(modelId, prompt, mode) {
 
   const systemPrompts = {
     field_values: globalThis.ResumeFormPlan.SYSTEM_PROMPT,
-    resume_import: `你是一个“标准化简历整理助手”。
-
-用户会提供原始简历文本，以及一个固定 JSON 模板。你的任务是把简历内容提取并填入该模板。
-
-要求：
-1) 只输出 JSON（不要输出其它文本，不要 Markdown 代码块）
-2) 只能使用模板已有字段，不要新增字段
-3) 不要编造不存在的信息；没有信息就保留空字符串
-4) 若遇到列表槽位，按时间从近到远填写
-5) 日期尽量规范化`,
+    resume_import: `你是资料提取助手。根据用户 Markdown 动态建立分组、条目和字段，不受固定简历模板限制。只提取明确信息，不编造事实或意愿，不填缺失信息；保留完整文本和换行。只输出紧凑 JSON，不重复输出原文作为 evidence；仅日期格式转换时需要单个原始日期 evidence。`,
 
     field_mapping: `你是一个“网页表单字段映射助手”。
 
 你将收到一个 JSON，包含：
 - fields：当前页面识别到的表单字段
 - fields 中的单个 field 可能额外带有 sectionKey、sectionLabel、sectionEvidence、nearbyLabels，用于表示扫描阶段推断出的区块和邻近标签
-- resumeFields：预先定义好的标准简历字段目录（含 path、label、sectionLabel、itemLabel、hasValue、valuePreview 等）
+- resumeFields：用户实际保存的动态资料字段目录（含 path、label、sectionLabel、itemLabel、hasValue、valuePreview 等）
 
 你的任务：
 1) 为每个页面 field 选择最合适的 resumePath
-2) 只做“字段映射”，不要生成最终填写值；customFields.* 是用户保存的自定义字段，综合 label、aliases、itemLabel 判断，只使用已存在的路径
+2) 只做“字段映射”，不要生成最终填写值；groups.* 是用户保存的动态字段，综合 label、aliases、itemLabel 判断，只使用已存在的路径
 3) 若字段需要简单转换，可返回 transform
 4) 若没有合适字段，resumePath 返回空字符串
 5) 只输出 JSON（不要输出其它文本，不要 Markdown 代码块）
@@ -81,15 +74,11 @@ async function callAI(modelId, prompt, mode) {
 3) 对同一区块内重复出现的“起止时间”字段，通常前一个映射开始时间，后一个映射结束时间
 4) 如果 field.label 为空但 sectionLabel / nearbyLabels 不为空，必须充分利用这些扫描线索，不要把它当成完全无信息字段
 
-校招场景优先级：
-1) 含“实习”“实习经历”“实习公司”“实习岗位”等语义时，优先映射到 internships.*，不要优先映射到 workExperiences.*
-2) 含“学生组织”“社团”“校园经历”“志愿服务”“科研助理”“班干部”“校园活动”等语义时，优先映射到 campusExperiences.*
-3) 含“学历类型”“培养方式”“实验室”“领域方向”“导师”“学号”“班级”“学制”等语义时，优先映射到 educations.*
-4) 含“学校名称”“学院”“专业”“学历”“GPA”“排名”“论文”“毕业状态”等教育语义时，也优先映射到 educations.*
+不同分组和条目可以使用任意名称；不得假定固定分类或路径。结合分组、条目名称和别名区分同名字段。
 
 保守规则：
 1) 如果页面字段只是状态性复选框，例如“没有实习经历”“无实习经历”“暂无项目经历”，只有在 resumeFields 中存在明确语义等价的布尔字段时才映射；否则返回空字符串
-2) 不要仅因为字段都出现在同一块区域，就把教育字段映射到 personal.* 或 additional.*
+2) 不要仅因为字段都出现在同一块区域，就映射到无关分组或条目
 3) 没有足够语义证据时，宁可不映射，也不要勉强猜测
 
 输出格式（严格遵守）：
@@ -97,7 +86,7 @@ async function callAI(modelId, prompt, mode) {
   "mappings": [
     {
       "fieldId": "f_1",
-      "resumePath": "personal.email",
+      "resumePath": "groups.g-example.items.i-example.fields.f-example.value",
       "reason": "该字段是邮箱",
       "transform": { "type": "none" }
     }
@@ -186,7 +175,14 @@ async function callAI(modelId, prompt, mode) {
   } catch (_) {
     throw new Error("API 返回不是有效 JSON");
   }
-  const content = data?.choices?.[0]?.message?.content;
+  const choice = data?.choices?.[0];
+  if (["length", "max_tokens"].includes(choice?.finish_reason)) {
+    const error = new Error("AI 输出达到长度上限，返回内容被截断，未保存任何解析结果");
+    error.code = "AI_OUTPUT_TRUNCATED";
+    throw error;
+  }
+  if (choice?.finish_reason === "content_filter") throw new Error("AI 服务未返回完整内容，请调整资料后重试");
+  const content = choice?.message?.content;
   if (!content) {
     throw new Error("API 返回格式错误：缺少 choices[0].message.content");
   }

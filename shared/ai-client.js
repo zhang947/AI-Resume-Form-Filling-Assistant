@@ -21,7 +21,9 @@
             return;
           }
 
-          reject(new Error(response.error || "AI 调用失败"));
+          const error = new Error(response.error || "AI 调用失败");
+          if (response.code) error.code = response.code;
+          reject(error);
         }
       );
     });

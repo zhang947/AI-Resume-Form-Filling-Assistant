@@ -54,9 +54,7 @@ function loadPayloadHelpers() {
 
 test("buildFieldMappingPayload only includes resume fields with values", () => {
   const helpers = loadPayloadHelpers();
-  const profile = helpers.schema.createEmptyResumeProfile();
-  profile.personal.fullName = "张三";
-  profile.personal.email = "zhangsan@example.com";
+  const profile = require("./library-fixture.cjs").profileFor([{ name: "姓名", value: "张三" }, { name: "邮箱", value: "zhangsan@example.com" }, { name: "未填写", value: "" }]);
 
   const payload = helpers.buildFieldMappingPayload(
     [{ fieldId: "f_1", label: "姓名", kind: "text" }],
@@ -67,6 +65,6 @@ test("buildFieldMappingPayload only includes resume fields with values", () => {
   );
 
   assert.equal(payload.resumeFields.length, 2);
-  assert.deepEqual(paths, ["personal.email", "personal.fullName"]);
+  assert.deepEqual(paths, JSON.parse(JSON.stringify(helpers.schema.getFieldCatalog({ profile }).slice(0, 2).map((f) => f.path).sort())));
   assert.ok(payload.resumeFields.every((field) => field.hasValue === true));
 });

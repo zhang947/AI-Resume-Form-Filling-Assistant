@@ -1,3 +1,4 @@
+const { profileFor, plain } = require("./library-fixture.cjs");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -79,7 +80,7 @@ test("large resume data is saved only to local storage", async () => {
   assert.equal("resumeTemplates" in fake.state.sync, false);
 });
 
-test("legacy synchronized resume data is migrated into the default template", async () => {
+test("legacy synchronized resume data is cleared instead of automatically restored", async () => {
   const resumeStorage = loadResumeStorage();
   const profile = { personal: { name: "旧版用户" } };
   const fake = createStorage({
@@ -94,14 +95,14 @@ test("legacy synchronized resume data is migrated into the default template", as
 
   assert.equal(state.activeTemplateId, resumeStorage.DEFAULT_TEMPLATE_ID);
   const saved = fake.state.local.resumeTemplates[resumeStorage.DEFAULT_TEMPLATE_ID];
-  assert.deepEqual(saved.profile, profile);
-  assert.equal(saved.rawText, "旧版原始简历");
-  assert.equal(saved.schemaVersion, 3);
+  assert.deepEqual(plain(saved.profile), { groups: [] });
+  assert.equal(saved.rawText, "");
+  assert.equal(saved.schemaVersion, 6);
   assert.equal("resumeStructured" in fake.state.sync, false);
   assert.equal("resumeRawText" in fake.state.sync, false);
 });
 
-test("current synchronized resume data is migrated without data loss", async () => {
+test("current synchronized resume data is cleared without reading or restoring it", async () => {
   const resumeStorage = loadResumeStorage();
   const profile = { personal: { name: "同步用户" } };
   const fake = createStorage({
@@ -115,8 +116,8 @@ test("current synchronized resume data is migrated without data loss", async () 
   const state = await resumeStorage.loadTemplateState(fake.storage);
   const saved = fake.state.local.resumeTemplates[state.activeTemplateId];
 
-  assert.deepEqual(saved.profile, profile);
-  assert.equal(saved.rawText, "同步原始简历");
+  assert.deepEqual(plain(saved.profile), { groups: [] });
+  assert.equal(saved.rawText, "");
   assert.equal(saved.schemaVersion, 6);
   assert.equal("resumeProfile" in fake.state.sync, false);
   assert.equal("resumeImportRawText" in fake.state.sync, false);
@@ -124,9 +125,10 @@ test("current synchronized resume data is migrated without data loss", async () 
 
 test("complete local templates are preferred without reading sync storage", async () => {
   const resumeStorage = loadResumeStorage();
-  const localProfile = { personal: { name: "本地用户" } };
+  const localProfile = profileFor([{ name: "姓名", value: "本地用户" }]);
   const fake = createStorage({
     local: {
+      resumeLibraryVersion: 1,
       resumeTemplates: {
         "tpl-a": {
           id: "tpl-a",
@@ -209,7 +211,7 @@ test("export and import round-trips all templates and the active id", async () =
   await resumeStorage.setActiveTemplateId(b.id, fake.storage);
   await resumeStorage.saveTemplateContent(
     b.id,
-    { profile: { personal: { fullName: "张三" } }, rawText: "原文", schemaVersion: 4 },
+    { profile: profileFor([{ name: "姓名", value: "张三" }]), rawText: "原文", schemaVersion: 4 },
     fake.storage
   );
 
@@ -221,7 +223,7 @@ test("export and import round-trips all templates and the active id", async () =
     payload.templates.some(
       (template) =>
         template.name === "游戏开发" &&
-        template.profile.personal.fullName === "张三"
+        template.profile.groups[0].items[0].fields[0].value === "张三"
     )
   );
 
@@ -230,7 +232,7 @@ test("export and import round-trips all templates and the active id", async () =
   assert.equal(result.activeTemplateId, b.id);
   const restored = result.templates.find((template) => template.id === b.id);
   assert.equal(restored.name, "游戏开发");
-  assert.equal(restored.profile.personal.fullName, "张三");
+  assert.equal(restored.profile.groups[0].items[0].fields[0].value, "张三");
 });
 
 test("import rejects malformed data and falls back to a default template", async () => {
@@ -255,18 +257,18 @@ test("single resume JSON export and import round-trip the active template", asyn
   const fake = createStorage();
   const state = await resumeStorage.loadTemplateState(fake.storage);
   await resumeStorage.saveTemplateContent(state.activeTemplateId, {
-    profile: { personal: { fullName: "张三" } },
+    profile: profileFor([{ name: "姓名", value: "张三" }]),
     rawText: "简历原文",
     schemaVersion: 7,
   }, fake.storage);
 
   const payload = await resumeStorage.exportActiveTemplateData(fake.storage);
   assert.equal(payload.kind, "resume-profile");
-  assert.equal(payload.profile.personal.fullName, "张三");
+  assert.equal(payload.profile.groups[0].items[0].fields[0].value, "张三");
 
   const fake2 = createStorage();
   const imported = await resumeStorage.importActiveTemplateData(payload, fake2.storage);
-  assert.equal(imported.profile.personal.fullName, "张三");
+  assert.equal(imported.profile.groups[0].items[0].fields[0].value, "张三");
   assert.equal(imported.rawText, "简历原文");
 });
 
@@ -298,4 +300,42 @@ test("both resume entry points use the shared local storage helper", () => {
       /chrome\.storage\.sync\.set\(\s*\{\s*\[RESUME_(?:PROFILE|IMPORT_RAW_TEXT)_KEY\]/
     );
   }
+});
+
+test("first dynamic-library load clears every old resume source once while retaining models and feature settings", async () => {
+  const storage = loadResumeStorage(), old = { personal: { fullName: "old" }, customFields: [{ value: "old custom" }] };
+  const fake = createStorage({ local: { resumeTemplates: { old: { id: "old", profile: old, rawText: "old raw" } }, activeResumeTemplateId: "old", resumeProfile: old, resumeImportRawText: "old", resumeMarkdownDocumentsV1: { old: "old MD" }, modelConfigs: { configured: true }, resumeSelectionLookupEnabled: true }, sync: { resumeStructured: old, resumeTemplates: { old }, modelConfigs: { sync: true } } });
+  const first = await storage.loadTemplateState(fake.storage);
+  assert.equal(first.templates.length, 1); assert.deepEqual(plain(first.templates[0].profile), { groups: [] });
+  assert.deepEqual(plain(fake.state.local.resumeMarkdownDocumentsV1), {});
+  assert.deepEqual(fake.state.local.modelConfigs, { configured: true }); assert.equal(fake.state.local.resumeSelectionLookupEnabled, true);
+  assert.deepEqual(fake.state.sync.modelConfigs, { sync: true }); assert.equal("resumeTemplates" in fake.state.sync, false);
+  const profile = profileFor([{ name: "手动信息", value: "new" }]);
+  await storage.saveTemplateContent(first.activeTemplateId, { profile }, fake.storage);
+  fake.state.local.resumeMarkdownDocumentsV1 = { [first.activeTemplateId]: "new MD" };
+  const second = await storage.loadTemplateState(fake.storage);
+  assert.deepEqual(plain(second.templates[0].profile), profile); assert.equal(fake.state.local.resumeMarkdownDocumentsV1[first.activeTemplateId], "new MD");
+  assert.equal(fake.calls.syncGet, 0);
+});
+test("old JSON imports are rejected explicitly instead of silently discarding data", async () => {
+  const storage = loadResumeStorage(), fake = createStorage();
+  await assert.rejects(storage.importTemplateData({ templates: [{ id: "old", profile: { personal: { fullName: "old" } } }] }, fake.storage), /旧版字段/);
+  await assert.rejects(storage.importActiveTemplateData({ profile: { personal: { fullName: "old" } } }, fake.storage), /旧版字段/);
+});
+test("a failed first initialization does not mark reset complete or delete legacy keys", async () => {
+  const storage = loadResumeStorage(), fake = createStorage({ local: { resumeProfile: { original: "retained until reset succeeds" } } });
+  fake.storage.local.set = async () => { throw new Error("storage unavailable"); };
+  await assert.rejects(storage.loadTemplateState(fake.storage), /storage unavailable/);
+  assert.equal(fake.state.local.resumeLibraryVersion, undefined);
+  assert.equal(fake.state.local.resumeProfile.original, "retained until reset succeeds");
+  assert.equal(fake.calls.localRemove.length, 0); assert.equal(fake.calls.syncRemove.length, 0);
+});
+test("malformed dynamic JSON is rejected before replacing the saved library", async () => {
+  const storage = loadResumeStorage(), fake = createStorage();
+  const first = await storage.loadTemplateState(fake.storage);
+  const profile = profileFor([{ name: "我的内容", value: "valid" }]);
+  await storage.saveTemplateContent(first.activeTemplateId, { profile }, fake.storage);
+  const malformed = { groups: [{ name: "组", items: [{ name: "条目", fields: [{ name: "bad", type: "text", value: { object: true } }] }] }] };
+  await assert.rejects(storage.importActiveTemplateData({ profile: malformed }, fake.storage), /字段格式/);
+  assert.deepEqual(plain(fake.state.local.resumeTemplates[first.activeTemplateId].profile), profile);
 });

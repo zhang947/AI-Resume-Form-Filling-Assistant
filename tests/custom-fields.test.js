@@ -3,77 +3,14 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
+const { loadSchema, profileFor, plain } = require("./library-fixture.cjs");
 const editorModule = require("../shared/custom-fields-editor.js");
+const importer = require("../shared/library-import.js");
 const matcher = require("../shared/selection-lookup-matcher.js");
-const source = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8").replace(/\r\n/g, "\n");
-const plain = (value) => JSON.parse(JSON.stringify(value));
-function loadSchema() { const context = { window: {} }; vm.runInNewContext(source("shared/resume-schema.js"), context); return context.window.ResumeSchema; }
 const schema = loadSchema();
-const longValue = "第一段：已确认的经历。\n\n第二段：保持换行。\n" + "完整内容".repeat(80) + "\n";
-const customs = [
-  { id: "cf-bank", name: "苏州银行应聘理由", group: "银行求职", aliases: ["应聘理由", "求职动机"], type: "textarea", value: longValue },
-  { id: "cf-energy", name: "深圳燃气应聘理由", group: "能源求职", aliases: ["应聘理由"], type: "textarea", value: "保存的另一条应聘理由" },
-  { id: "cf-date", name: "可到岗日期", group: "求职偏好", aliases: ["到岗时间"], type: "date", value: "2027-07" },
-];
-
-test("custom fields survive normalization and an old profile defaults to an empty custom library", () => {
-  const normalized = schema.normalizeResumeProfile({ personal: { fullName: "Alice" }, customFields: customs });
-  assert.equal(normalized.personal.fullName, "Alice");
-  assert.deepEqual(plain(normalized.customFields), customs);
-  assert.deepEqual(plain(schema.normalizeResumeProfile(normalized).customFields), customs);
-  assert.deepEqual(plain(schema.normalizeResumeProfile({}).customFields), []);
-  const metadataOnly = schema.normalizeResumeProfile({ customFields: [{ ...customs[0], value: "" }] });
-  assert.equal(schema.hasAnyFilledField(metadataOnly), false);
-});
-
-test("custom IDs are stable through rename/reorder, and value paths cannot change metadata or create unknown fields", () => {
-  const profile = schema.normalizeResumeProfile({ customFields: customs });
-  const originalPath = "customFields.cf-bank.value";
-  profile.customFields.reverse(); profile.customFields.find((field) => field.id === "cf-bank").name = "重命名后的信息";
-  assert.equal(schema.getValueByPath(profile, originalPath), longValue);
-  schema.setValueByPath(profile, originalPath, "编辑后的内容\n完整保存");
-  assert.equal(profile.customFields.find((field) => field.id === "cf-bank").value, "编辑后的内容\n完整保存");
-  schema.setValueByPath(profile, "customFields.cf-bank.name", "不能经填表路径改名");
-  schema.setValueByPath(profile, "customFields.__proto__.value", "invalid");
-  schema.setValueByPath(profile, "customFields.cf-missing.value", "invalid");
-  assert.equal(profile.customFields.find((field) => field.id === "cf-bank").name, "重命名后的信息");
-  assert.equal(profile.customFields.length, 3);
-  assert.equal(schema.getValueByPath(profile, "customFields.__proto__.value"), "");
-  profile.customFields = profile.customFields.filter((field) => field.id !== "cf-bank");
-  assert.equal(schema.getValueByPath(profile, originalPath), "");
-});
-
-test("invalid or duplicate imported IDs are repaired deterministically without dropping content", () => {
-  const fields = schema.normalizeCustomFields([{ ...customs[0], id: "__proto__" }, { ...customs[1], id: "cf-bank" }, { ...customs[2], id: "cf-bank" }]);
-  assert.equal(new Set(fields.map((field) => field.id)).size, 3);
-  assert.ok(fields.every((field) => /^cf-[a-z0-9-]+$/.test(field.id)));
-  assert.deepEqual(plain(schema.normalizeCustomFields(fields)), plain(fields));
-  assert.equal(fields[0].value, longValue);
-  const aliases = schema.normalizeCustomFields([{ ...customs[0], aliases: " 应聘理由，求职动机\n应聘理由；个人优势 " }])[0].aliases;
-  assert.deepEqual(plain(aliases), ["应聘理由", "求职动机", "个人优势"]);
-});
-
-test("custom field validation enforces a name, multiline type and one valid date without inventing precision", () => {
-  assert.match(schema.validateCustomFields([{ ...customs[0], name: " " }]), /名称/);
-  assert.match(schema.validateCustomFields([{ ...customs[0], type: "text" }]), /多行文本/);
-  for (const value of ["2027", "2027/7", "2027-07-01", "至今"]) assert.equal(schema.validateCustomFields([{ ...customs[2], value }]), "");
-  for (const value of ["2027-02-30", "2027-99", "2027-07 至 2028-07"]) assert.ok(schema.validateCustomFields([{ ...customs[2], value }]));
-  assert.equal(schema.normalizeCustomFields([{ ...customs[2], value: "2027/7" }])[0].value, "2027-07");
-});
-
-test("selection lookup combines fixed fields and named custom aliases without overwriting same-keyword variants", () => {
-  const profile = schema.normalizeResumeProfile({ personal: { summary: "固定字段简介" }, customFields: [...customs, { ...customs[0], id: "cf-self", name: "岗位自我评价", aliases: ["自我评价"], value: "保存的岗位自评" }, { ...customs[0], id: "cf-empty", name: "空内容", value: "" }] });
-  const index = matcher.buildIndex(profile, schema);
-  const found = matcher.match(index, "* 应聘理由：（必填）");
-  assert.equal(found.length, 2);
-  assert.deepEqual(found.map((item) => item.sourceName), ["银行求职 · 苏州银行应聘理由", "能源求职 · 深圳燃气应聘理由"]);
-  assert.equal(found[0].copyValue, longValue); assert.ok(found[0].preview.length < longValue.length);
-  assert.deepEqual(matcher.match(index, "自我评价").map((item) => item.copyValue), ["固定字段简介", "保存的岗位自评"]);
-  assert.equal(matcher.match(index, "空内容").length, 0);
-  assert.equal(matcher.search(index, "求职动机").length, 1); // aliases participate in manual search
-  assert.equal(matcher.match(index, "到岗时间")[0].copyValue, "2027-07");
-});
-
+const source = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8").replace(/\r\n/g, "\n");
+const longValue = "第一段：已确认经历。\n\n第二段：保留完整换行。\n" + "实际内容".repeat(90) + "\n";
+const info = () => profileFor([{ name: "应聘理由", aliases: ["求职动机"], type: "textarea", value: longValue }], { group: "银行求职", item: "某银行" });
 function extract(text, start, next) {
   const from = text.indexOf(start), until = text.indexOf(next, from + start.length);
   assert.ok(from >= 0 && until > from, start); return text.slice(from, until);
@@ -87,34 +24,26 @@ function contentHelpers() {
     extract(content, "function createMappingCacheSignature(fields) {", "async function loadMappingCacheEntry(cacheKey, meta = {})"), context);
   return context;
 }
-
-test("AI mapping receives custom names, groups, aliases and existing values, and only accepts actual custom paths", () => {
-  const helpers = contentHelpers(), profile = schema.normalizeResumeProfile({ customFields: customs });
-  const fields = [{ fieldId: "f", kind: "textarea", label: "求职动机" }];
-  const payload = helpers.buildFieldMappingPayload(fields, profile);
-  const field = payload.resumeFields.find((item) => item.path === "customFields.cf-bank.value");
-  assert.equal(field.label, "苏州银行应聘理由"); assert.equal(field.itemLabel, "银行求职");
-  assert.deepEqual(plain(field.aliases), ["应聘理由", "求职动机"]); assert.equal(field.hasValue, true);
-  const mapped = helpers.normalizeMappings([{ fieldId: "f", resumePath: field.path }], fields, profile);
-  assert.equal(mapped[0].resumePath, field.path); assert.equal(schema.getValueByPath(profile, mapped[0].resumePath), longValue);
-  for (const invalid of ["customFields.cf-bank.name", "customFields.cf-missing.value", "customFields.__proto__.value"]) {
+test("AI mapping receives dynamic group/item/field names and aliases; only actual saved value paths are accepted", () => {
+  const helpers = contentHelpers(), profile = info(), fields = [{ fieldId: "f", kind: "textarea", label: "求职动机" }];
+  const payload = helpers.buildFieldMappingPayload(fields, profile), field = payload.resumeFields[0];
+  assert.equal(field.label, "应聘理由"); assert.equal(field.itemLabel, "某银行"); assert.equal(field.sectionLabel, "银行求职");
+  assert.deepEqual(plain(field.aliases), ["求职动机"]);
+  assert.equal(helpers.normalizeMappings([{ fieldId: "f", resumePath: field.path }], fields, profile)[0].resumePath, field.path);
+  for (const invalid of [field.path.replace(/value$/, "name"), "personal.email", "groups.__proto__.items.i-x.fields.f-x.value", field.path.replace("f-import-0-0-0", "f-missing")]) {
     assert.equal(helpers.normalizeMappings([{ fieldId: "f", resumePath: invalid }], fields, profile)[0].resumePath, "");
   }
 });
-
-test("custom edits invalidate the actual mapping cache key while profiles without custom fields retain the original key", () => {
-  const helpers = contentHelpers(), fields = [{ kind: "textarea", label: "应聘理由" }];
-  const profile = schema.normalizeResumeProfile({ customFields: customs });
+test("editing any library metadata/content or changing order invalidates the mapping cache", () => {
+  const helpers = contentHelpers(), fields = [{ kind: "textarea", label: "应聘理由" }], profile = info();
   const baseline = helpers.createMappingCacheKey(fields, profile);
-  for (const property of ["name", "group", "aliases", "value", "type"]) {
-    const edited = plain(profile); edited.customFields[0][property] = property === "aliases" ? ["新别名"] : property === "type" ? "text" : "changed";
+  for (const property of ["name", "aliases", "value", "type", "role"]) {
+    const edited = plain(profile), field = edited.groups[0].items[0].fields[0];
+    field[property] = property === "aliases" ? ["新别名"] : property === "type" ? "text" : property === "role" ? "start" : "changed";
     assert.notEqual(helpers.createMappingCacheKey(fields, edited), baseline);
   }
-  const moved = plain(profile); moved.customFields.reverse(); assert.notEqual(helpers.createMappingCacheKey(fields, moved), baseline);
-  const removed = plain(profile); removed.customFields.pop(); assert.notEqual(helpers.createMappingCacheKey(fields, removed), baseline);
-  assert.equal(helpers.createMappingCacheKey(fields, schema.createEmptyResumeProfile()), helpers.createMappingCacheKey(fields));
+  const edited = plain(profile); edited.groups[0].name = "能源"; assert.notEqual(helpers.createMappingCacheKey(fields, edited), baseline);
 });
-
 class Node {
   constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.attrs = {}; this.listeners = new Map(); this.value = ""; }
   appendChild(node) { this.children.push(node); node.parentNode = this; return node; }
@@ -124,7 +53,6 @@ class Node {
   setAttribute(key, value) { this.attrs[key] = value; }
   addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }
   async emit(type) { for (const fn of this.listeners.get(type) || []) await fn({ target: this }); }
-  focus() { this.focused = true; }
   scrollIntoView() {}
 }
 const walk = (node) => [node, ...node.children.flatMap(walk)];
@@ -132,146 +60,126 @@ function editorHarness() {
   const host = new Node("div"), nav = new Node("aside"), document = { createElement: (tag) => new Node(tag) };
   let changes = 0;
   const editor = editorModule.create({ document, host, nav, schema, onChange: () => changes++ });
-  const control = (id, property) => walk(host).find((node) => node.dataset.customFieldId === id)?.children.flatMap(walk).find((node) => node.dataset.customProperty === property);
-  return { host, nav, editor, control, changes: () => changes };
+  const namedControl = (label) => walk(host).filter((node) => node.tagName === "LABEL").find((node) => node.children[0].textContent === label)?.children[1];
+  return { host, nav, editor, namedControl, changes: () => changes };
 }
-
-test("editor adds and edits custom information, preserves line breaks, validates names and restores saved state", async () => {
+test("empty editor can manually build groups, items and fields, preserve newlines and reopen saved data", async () => {
   const h = editorHarness(); h.editor.render([]);
-  await walk(h.host).find((node) => node.textContent === "新增信息").emit("click");
-  const id = h.editor.collect()[0].id;
-  assert.match(h.editor.validate(), /名称/);
-  for (const [property, value] of [["name", "自定义信息"], ["group", "银行求职"], ["aliases", "应聘理由\n求职动机"]]) {
-    h.control(id, property).value = value; await h.control(id, property).emit("input");
-  }
-  h.control(id, "type").value = "textarea"; await h.control(id, "type").emit("change");
-  h.control(id, "value").value = longValue; await h.control(id, "value").emit("input");
-  assert.equal(h.editor.validate(), ""); assert.ok(h.changes() >= 5);
-  const saved = schema.normalizeResumeProfile({ customFields: h.editor.collect() });
-  const reopened = editorHarness(); reopened.editor.render(saved.customFields);
-  assert.deepEqual(plain(reopened.editor.collect()), plain(saved.customFields));
-  assert.equal(reopened.control(id, "value").value, longValue);
+  const gid = h.editor.addGroup(); assert.match(h.editor.validate(), /分组名称/);
+  const set = async (label, value, event = "input") => { const c = h.namedControl(label); c.value = value; await c.emit(event); };
+  await set("分组名称", "自主资料"); const iid = h.editor.addItem(gid);
+  await set("条目名称", "某条经历"); h.editor.addField(gid, iid);
+  await set("字段名称", "完整描述"); await set("匹配别名（逗号或换行分隔）", "项目内容，项目描述");
+  await set("内容类型", "textarea", "change"); await set("内容", longValue);
+  assert.equal(h.editor.validate(), ""); assert.ok(h.changes() >= 8);
+  const saved = plain(h.editor.collect()); const next = editorHarness(); next.editor.render(saved);
+  assert.deepEqual(plain(next.editor.collect()), saved); assert.equal(next.namedControl("内容").value, longValue);
 });
-
-test("editor rename/reorder/copy/delete/undo keep stable IDs and do not modify unrelated data", async () => {
-  const h = editorHarness(); h.editor.render(customs);
-  h.control("cf-bank", "name").value = "重命名"; await h.control("cf-bank", "name").emit("input");
-  h.editor.move("cf-bank", 1); assert.equal(h.editor.collect()[1].id, "cf-bank");
-  const copyId = h.editor.duplicate("cf-bank"); assert.notEqual(copyId, "cf-bank");
-  assert.equal(h.editor.collect().find((field) => field.id === copyId).value, longValue);
-  h.editor.remove("cf-bank"); assert.equal(h.editor.collect().some((field) => field.id === "cf-bank"), false);
-  h.editor.undo(); assert.equal(h.editor.collect().find((field) => field.id === "cf-bank").name, "重命名");
-  assert.equal(h.editor.collect().find((field) => field.id === "cf-energy").value, customs[1].value);
-  assert.equal(customs[0].name, "苏州银行应聘理由");
-  assert.equal(walk(h.nav).filter((node) => node.dataset.resumeNav === "customFields").length, 1);
+test("rename/reorder/duplicate/delete/undo at each level keep stable IDs and independent copies", () => {
+  const h = editorHarness(); h.editor.render(info().groups);
+  const g = h.editor.collect()[0], i = g.items[0], f = i.fields[0];
+  h.editor.mutate("duplicate", f.id, g.id, i.id); let fields = h.editor.collect()[0].items[0].fields;
+  assert.equal(fields.length, 2); assert.notEqual(fields[0].id, fields[1].id); assert.equal(fields[1].value, longValue);
+  h.editor.mutate("move", f.id, g.id, i.id, 1); assert.equal(h.editor.collect()[0].items[0].fields[1].id, f.id);
+  h.editor.mutate("remove", f.id, g.id, i.id); h.editor.undo(); assert.equal(h.editor.collect()[0].items[0].fields[1].id, f.id);
+  h.editor.mutate("duplicate", i.id, g.id); assert.notEqual(h.editor.collect()[0].items[0].fields[0].id, h.editor.collect()[0].items[1].fields[0].id);
+  h.editor.mutate("duplicate", g.id); assert.notEqual(h.editor.collect()[0].items[0].id, h.editor.collect()[1].items[0].id);
+  h.editor.mutate("remove", g.id); h.editor.undo(); assert.equal(h.editor.collect()[0].id, g.id);
 });
-
-test("custom names, aliases, groups and values are rendered as text rather than executable HTML", () => {
-  const h = editorHarness();
-  h.editor.render([{ ...customs[0], name: "<img onerror=bad()>", group: "<script>bad()</script>", aliases: ["</textarea><script>bad()</script>"], value: "<script>bad()</script>\n保留原文" }]);
+test("names, aliases and values render as text with no HTML execution", () => {
+  const h = editorHarness(), profile = profileFor([{ name: "<img onerror=bad()>", aliases: ["<script>bad()</script>"], value: "<script>bad()</script>\n原文", type: "textarea" }]);
+  h.editor.render(profile.groups);
   assert.equal(walk(h.host).some((node) => ["IMG", "SCRIPT"].includes(node.tagName)), false);
-  assert.equal(h.editor.collect()[0].value, "<script>bad()</script>\n保留原文");
+  assert.equal(h.namedControl("内容").value, "<script>bad()</script>\n原文");
 });
-
-function memoryStorage(initial = {}) {
-  const state = structuredClone(initial), writes = [];
-  function area() { return {
-    get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).filter((key) => Object.hasOwn(state, key)).map((key) => [key, structuredClone(state[key])])),
-    set: async (update) => { writes.push(update); Object.assign(state, structuredClone(update)); },
-    remove: async (keys) => { keys.forEach((key) => delete state[key]); },
-  }; }
-  return { state, writes, local: area() };
+function extracted(value, extra = {}) {
+  return { groups: [{ name: "银行求职", items: [{ name: "某银行", fields: [{ name: "应聘理由", type: "textarea", value, evidence: value, ...extra }] }] }] };
 }
-function loadStorage() { const context = { window: {}, console }; vm.runInNewContext(source("shared/resume-storage.js"), context); return context.window.ResumeStorage; }
-
-test("templates clone custom data independently and both JSON formats round-trip it; old JSON remains importable", async () => {
-  const storage = loadStorage(), memory = memoryStorage(), initial = await storage.loadTemplateState(memory);
-  const profile = schema.normalizeResumeProfile({ personal: { fullName: "Alice" }, customFields: customs });
-  await storage.saveTemplateContent(initial.activeTemplateId, { profile }, memory);
-  const copy = await storage.duplicateTemplate(initial.activeTemplateId, memory);
-  const edited = plain(copy.profile); edited.customFields[0].value = "副本中的修改";
-  await storage.saveTemplateContent(copy.id, { profile: edited }, memory);
-  assert.equal(memory.state.resumeTemplates[initial.activeTemplateId].profile.customFields[0].value, longValue);
-  const single = JSON.parse(JSON.stringify(await storage.exportActiveTemplateData(memory)));
-  await storage.setActiveTemplateId(copy.id, memory); await storage.importActiveTemplateData(single, memory);
-  assert.deepEqual(memory.state.resumeTemplates[copy.id].profile.customFields, customs);
-  const backup = JSON.parse(JSON.stringify(await storage.exportTemplateData(memory)));
-  const restored = memoryStorage(); await storage.importTemplateData(backup, restored);
-  const state = await storage.loadTemplateState(restored);
-  assert.ok(state.templates.every((template) => JSON.stringify(schema.normalizeResumeProfile(template.profile).customFields) === JSON.stringify(customs)));
-  await storage.importActiveTemplateData({ profile: { personal: { fullName: "Legacy" } } }, restored);
-  const legacy = await storage.exportActiveTemplateData(restored);
-  assert.equal(schema.normalizeResumeProfile(legacy.profile).personal.fullName, "Legacy");
-  assert.deepEqual(plain(schema.normalizeResumeProfile(legacy.profile).customFields), []);
+test("AI parses arbitrary nontraditional content into dynamic fields while preserving full source text", () => {
+  const plan = importer.prepare(schema, { groups: [] }, extracted(longValue), "# 资料\n" + longValue);
+  const profile = importer.apply(schema, plan);
+  assert.equal(schema.getCatalogWithValues(profile)[0].value, longValue); assert.equal(plan.changes.length, 1);
+  assert.equal(matcher.match(matcher.buildIndex(profile, schema), "应聘理由")[0].copyValue, longValue);
 });
-
+test("time aliases work in freely named groups, sort each pair start/end, and never mix start with end", () => {
+  const profile = profileFor([
+    { name: "时间二", type: "date", role: "end", aliases: ["就读年月", "开始时间"], value: "至今" },
+    { name: "时间一", type: "date", role: "start", aliases: ["就读年月", "入学时间"], value: "2023-09" },
+  ], { group: "自主命名的分组", item: "自主命名的经历" });
+  const index = matcher.buildIndex(profile, schema);
+  assert.deepEqual(matcher.match(index, "就读年月").map((v) => v.copyValue), ["2023-09", "至今"]);
+  assert.deepEqual(matcher.match(index, "开始时间").map((v) => v.copyValue), ["2023-09"]);
+  assert.deepEqual(matcher.match(index, "入学时间").map((v) => v.copyValue), ["2023-09"]);
+  assert.deepEqual(matcher.match(index, "结束时间").map((v) => v.copyValue), ["至今"]);
+});
+test("duplicates are ignored and conflicts preserve saved manual values unless explicitly selected", () => {
+  const before = info();
+  const duplicate = importer.prepare(schema, before, extracted(longValue), longValue);
+  assert.equal(duplicate.duplicates, 1); assert.equal(duplicate.changes.length, 0);
+  const conflict = importer.prepare(schema, before, extracted("新的原文值"), "新的原文值");
+  assert.equal(conflict.conflicts.length, 1); assert.equal(conflict.changes.length, 0);
+  assert.equal(schema.getCatalogWithValues(importer.apply(schema, conflict))[0].value, longValue);
+  assert.equal(schema.getCatalogWithValues(importer.apply(schema, conflict, conflict.conflicts))[0].value, "新的原文值");
+  assert.equal(schema.getFieldCatalog({ profile: importer.apply(schema, conflict, conflict.conflicts) })[0].path, schema.getFieldCatalog({ profile: before })[0].path);
+});
+test("invented facts, missing evidence, malformed responses and invalid dates are rejected before saving", () => {
+  assert.throws(() => importer.prepare(schema, {}, {}, "原文"), /groups/);
+  assert.throws(() => importer.prepare(schema, {}, extracted("原文", { evidence: "" }), "原文"), /原文/);
+  assert.throws(() => importer.prepare(schema, {}, extracted("编造事实", { evidence: "原文" }), "原文"), /原文不符/);
+  assert.throws(() => importer.prepare(schema, {}, extracted("2099-99", { type: "date" }), "2099-99"), /有效日期/);
+});
+test("AI date reformatting preserves precision and keeps 至今 literal, never inventing a month or day", () => {
+  for (const [evidence, value] of [["2027/7", "2027-07"], ["2027", "2027"], ["至今", "至今"]]) {
+    const plan = importer.prepare(schema, {}, extracted(value, { type: "date", evidence, role: "end" }), evidence);
+    assert.equal(schema.getCatalogWithValues(importer.apply(schema, plan))[0].value, value);
+  }
+  assert.throws(() => importer.prepare(schema, {}, extracted("2027-01-01", { type: "date", evidence: "2027" }), "2027"), /原文不符/);
+});
+test("preview defaults conflict checkboxes off, preserves all text, and leaves a failed save retryable", async () => {
+  const plan = importer.prepare(schema, info(), extracted("冲突原文"), "冲突原文"), host = new Node("div");
+  const document = { createElement: (tag) => new Node(tag), createTextNode: (text) => Object.assign(new Node("span"), { textContent: text }) };
+  let selected, fail = true;
+  const panel = importer.preview({ document, host, plan, onApply: async (items) => { if (fail) throw new Error("资料已修改"); selected = items; } });
+  const checkbox = walk(panel).find((n) => n.tagName === "INPUT"), save = walk(panel).find((n) => n.textContent === "保存所选信息");
+  assert.equal(checkbox.checked, false); assert.ok(walk(panel).some((n) => n.textContent === `原值：${longValue}`));
+  await save.emit("click"); assert.equal(save.disabled, false); assert.ok(host.children.includes(panel));
+  checkbox.checked = true; fail = false; await save.emit("click"); assert.equal(selected.length, 1); assert.equal(host.children.length, 0);
+});
 for (const file of ["popup.js", "resume-editor.js"]) {
-  test(`${file} saves custom fields with fixed fields and blocks invalid custom data`, async () => {
-    const writes = [], context = { schema, resumeProfile: schema.normalizeResumeProfile({ customFields: customs }),
-      customFieldsEditor: { collect: () => customs, validate: () => "" },
-      resumeFormHost: { querySelectorAll: () => [{ dataset: { resumePath: "personal.fullName" }, value: "Alice" }] },
+  test(`${file} saves only dynamic data and blocks invalid manual edits`, async () => {
+    const writes = [], profile = info(), text = source(file);
+    const context = { schema, resumeProfile: profile, customFieldsEditor: { collect: () => profile.groups, validate: () => "" },
       activeTemplateId: "a", resumeStorage: { saveTemplateContent: async (id, value) => writes.push({ id, value }) },
       saveResumeBtn: {}, resumeImportTextEl: { value: "" }, isResumeDirty: true, document: {},
-      updatePageStatus() {}, updateStartFillAvailability() {}, addLog() {},
-    };
+      updatePageStatus() {}, updateStartFillAvailability() {}, addLog() {} };
     vm.createContext(context);
-    const text = source(file);
     vm.runInContext(extract(text, "function collectResumeProfileFromForm() {", "function syncResumeProfileFromForm() {") +
       extract(text, "async function persistResumeProfile({ silent = false } = {}) {", 'saveResumeBtn.addEventListener("click"'), context);
-    await context.persistResumeProfile({ silent: true });
-    assert.equal(writes[0].value.profile.personal.fullName, "Alice");
-    assert.deepEqual(plain(writes[0].value.profile.customFields), customs);
+    await context.persistResumeProfile({ silent: true }); assert.deepEqual(plain(writes[0].value.profile), profile);
     context.customFieldsEditor.validate = () => "名称缺失";
     assert.equal(await context.persistResumeProfile({ silent: true }), false); assert.equal(writes.length, 1);
-    let exported = false;
-    context.isResumeDirty = true;
-    context.resumeStorage.exportTemplateData = async () => { exported = true; };
-    vm.runInContext(extract(text, "async function handleExportTemplates() {", "async function handleImportTemplates() {"), context);
-    await context.handleExportTemplates(); assert.equal(exported, false);
-    let switched = false, restoredSelectors = false;
-    context.resumeStorage.setActiveTemplateId = async () => { switched = true; };
-    context.renderTemplateSelectors = () => { restoredSelectors = true; };
-    vm.runInContext(extract(text, "async function switchActiveTemplate(id) {", "function openTemplateNameModal(mode) {"), context);
-    await context.switchActiveTemplate("b");
-    assert.equal(switched, false); assert.equal(restoredSelectors, true); assert.equal(context.activeTemplateId, "a");
   });
-
-  test(`${file} AI resume imports preserve manually maintained custom data and reject invented custom fields`, async () => {
-    const writes = [], messages = [], draft = plain(customs);
-    const context = { schema, isImporting: false, isResumeDirty: false, activeTemplateId: "a", resumeProfile: schema.normalizeResumeProfile({ customFields: customs }),
-      customFieldsEditor: { collect: () => draft }, getActiveModel: async () => ({ id: "model" }), isModelConfigured: () => true,
-      aiClient: { callAI: async () => { draft[0].value = "等待期间手动编辑的内容"; return JSON.stringify({ personal: { fullName: "Imported" }, customFields: [{ ...customs[0], id: "cf-invented", value: "AI invented" }] }); } },
-      resumePrompts: { buildResumeImportPrompt: () => "prompt" }, limitTextForPrompt: (text) => text, parseJsonFromAiText: JSON.parse,
-      resumeStorage: { saveTemplateContent: async (id, data) => writes.push({ id, data }) },
-      importResumeBtn: {}, uploadPdfBtn: {}, saveResumeBtn: {}, resetCollapsedResumeSections() {}, renderResumeEditor() {}, updateStartFillAvailability() {}, openModal() {},
-      updatePageStatus: (...args) => messages.push(args), updateStatus: (...args) => messages.push(args), addLog: (...args) => messages.push(args),
-    };
-    vm.createContext(context);
-    vm.runInContext(extract(source(file), "async function importResumeToSchema(rawText) {", "function limitTextForPrompt(text) {"), context);
-    await context.importResumeToSchema("原始简历");
-    assert.equal(writes.length, 1, JSON.stringify(messages));
-    assert.equal(writes[0].data.profile.personal.fullName, "Imported");
-    assert.deepEqual(plain(writes[0].data.profile.customFields), draft);
-    context.aiClient.callAI = async () => { context.activeTemplateId = "b"; return '{"personal":{"fullName":"Wrong template"}}'; };
-    await context.importResumeToSchema("另一次导入");
-    assert.equal(writes.length, 1); assert.ok(messages.some((message) => String(message[1]).includes("模板已切换")));
+  test(`${file} AI extraction previews before saving and protects edits/template switches during the request or review`, async () => {
+    const text = source(file), before = info(), logs = [], writes = [];
+    let preview, aiCalls = 0;
+    const state = { activeTemplateId: "a", templates: [{ id: "a", profile: before }] };
+    const context = { schema, activeTemplateId: "a", isResumeDirty: false, isImporting: false,
+      importResumeBtn: {}, uploadPdfBtn: {}, resumeFormHost: { parentElement: {} }, document: {},
+      resumeStorage: { loadTemplateState: async () => plain(state), saveTemplateContent: async (id, value) => writes.push({ id, value }) },
+      getActiveModel: async () => ({ id: "model" }), isModelConfigured: () => true,
+      resumePrompts: { buildResumeImportPrompt: (_schema, raw) => raw }, parseJsonFromAiText: JSON.parse,
+      aiClient: { callAI: async () => { aiCalls++; return JSON.stringify(extracted("新内容")); } },
+      window: { ResumeLibraryImport: { ...importer, preview: (args) => preview = args } },
+      addLog: (...args) => logs.push(args), updatePageStatus: (...args) => logs.push(args), loadResumeProfile: async () => {} };
+    vm.createContext(context); vm.runInContext(extract(text, "async function importResumeToSchema(rawText) {", "function limitTextForPrompt("), context);
+    await context.importResumeToSchema("新内容"); assert.equal(aiCalls, 1); assert.equal(writes.length, 0); assert.equal(preview.plan.conflicts.length, 1);
+    context.isResumeDirty = true; await assert.rejects(preview.onApply([]), /已修改/);
+    context.isResumeDirty = false; state.activeTemplateId = "b"; await assert.rejects(preview.onApply([]), /已修改/);
+    state.activeTemplateId = "a"; state.templates[0].profile.groups[0].name = "外部修改"; await assert.rejects(preview.onApply([]), /已修改/);
+    state.templates[0].profile = plain(before); // before is independent from the returned storage snapshot.
+    // Recreate the immutable original because the fixture was intentionally mutated.
+    state.templates[0].profile = info();
+    await preview.onApply(preview.plan.conflicts); assert.equal(writes.length, 1);
+    assert.equal(schema.getCatalogWithValues(writes[0].value.profile)[0].value, "新内容");
   });
 }
-
-test("Markdown-to-fields preview keeps existing custom information and does not accept AI-created custom entries", async () => {
-  const before = schema.normalizeResumeProfile({ personal: { fullName: "Before" }, customFields: customs });
-  const context = { schema, isResumeDirty: false, activeTemplateId: "a", markdownConversion: null,
-    getActiveModel: async () => ({ id: "model" }), isModelConfigured: () => true,
-    resumeStorage: { loadTemplateState: async () => ({ templates: [{ id: "a", profile: before }] }) },
-    aiClient: { callAI: async () => JSON.stringify({ personal: { fullName: "Imported" }, customFields: [{ ...customs[0], id: "cf-ai", value: "AI invented" }] }) },
-    resumePrompts: { buildResumeImportPrompt: () => "prompt" }, parseJsonFromAiText: JSON.parse,
-    document: { getElementById: () => ({}) }, addLog() {}, openModal() {},
-  };
-  const text = source("popup.js"), from = text.indexOf("async onConvert(markdown, id) {"), until = text.indexOf("\n    },\n  });", from);
-  assert.ok(from >= 0 && until > from);
-  vm.createContext(context);
-  const convert = vm.runInContext(`({${text.slice(from, until)}\n}}).onConvert`, context);
-  await convert("Markdown 资料", "a");
-  assert.deepEqual(plain(context.markdownConversion.profile.customFields), customs);
-  assert.deepEqual(plain(before.customFields), customs);
-});

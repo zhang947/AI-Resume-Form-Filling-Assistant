@@ -13,14 +13,12 @@
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function (ownership) {
   "use strict";
-  const VERSION = "selection-lookup-custom-fields-v3";
+  const VERSION = "selection-lookup-library-v4";
   const SETTINGS_KEY = "resumeSelectionLookupEnabled";
-  const DATA_KEYS = ["resumeTemplates", "activeResumeTemplateId", "resumeProfile", "resumeStructured"];
-  const meaningful = (profile) => profile && typeof profile === "object" &&
-    Object.values(profile).some((value) => value && (typeof value !== "object" || meaningful(value)));
+  const DATA_KEYS = ["resumeLibraryVersion", "resumeTemplates", "activeResumeTemplateId"];
   async function readSnapshot(storage) {
     const data = await storage.local.get(DATA_KEYS);
-    const templates = data.resumeTemplates;
+    const templates = data.resumeLibraryVersion === 1 ? data.resumeTemplates : null;
     const activeId = data.activeResumeTemplateId;
     if (templates && typeof templates === "object") {
       const entries = Object.entries(templates).filter(([, item]) => item && typeof item === "object");
@@ -28,13 +26,9 @@
       if (template) return { profile: template.profile || {}, templateName: template.name || "当前模板" };
       return { profile: {}, templateName: "当前模板" };
     }
-    let profile = data.resumeProfile || data.resumeStructured || {};
-    if (!meaningful(profile) && storage.sync?.get) {
-      const legacy = await storage.sync.get(["resumeProfile", "resumeStructured"]);
-      profile = legacy.resumeProfile || legacy.resumeStructured || profile;
-    }
-    return { profile, templateName: "默认简历" };
+    return { profile: { groups: [] }, templateName: "默认简历" };
   }
+
   function create({ window: win, document: doc, storage, matcher, schema, overlayFactory, clipboard, isContextValid = () => true }) {
     let enabled = false, selection = null, down = null, generation = 0, disposed = false, settingsVersion = 0;
     const lease = isContextValid() ? ownership.acquire(doc) : null;

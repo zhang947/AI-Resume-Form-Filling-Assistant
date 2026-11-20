@@ -1217,3 +1217,11 @@ body {
 
 .custom-fields-section [hidden] { display: none !important; }
 .custom-field-metadata .resume-textarea { min-height: 64px; }
+
+/* Dynamic library and extraction preview use native text controls only. */
+.library-group { border-left: 3px solid var(--primary-color, #4f72ff); }
+.library-item { margin: 14px 0; background: var(--bg-color, #f8faff); }
+.library-field { margin: 10px 0; }
+.library-import-preview { grid-column: 1 / -1; min-width: 0; padding: 16px; }
+.library-import-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font: inherit; }
+.library-import-preview > button { margin: 8px 8px 0 0; }

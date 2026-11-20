@@ -14,7 +14,7 @@
           <img class="logo-icon" src="icons/icon128.png" alt="AI 简历填表助手图标" />
           <div class="editor-header-copy">
             <h1>简历配置</h1>
-            <p>在宽页面里维护标准简历，保存后会同步给侧边栏自动填充流程。</p>
+            <p>在宽页面里维护资料库，保存后会同步给侧边栏自动填充流程。</p>
           </div>
         </div>
         <div class="editor-toolbar">
@@ -25,15 +25,15 @@
           <button class="btn btn-outline btn-sm" id="deleteTemplateBtn" title="删除当前模板">删除</button>
           <button class="btn btn-outline btn-sm" id="exportTemplatesBtn" title="导出全部模板为 JSON 备份">导出</button>
           <button class="btn btn-outline btn-sm" id="importTemplatesBtn" title="从 JSON 备份导入（覆盖当前模板）">导入</button>
-          <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前标准简历 JSON">导出当前简历</button>
-          <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入标准简历 JSON 到当前模板">导入当前简历</button>
+          <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前资料库 JSON">导出当前简历</button>
+          <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入资料库 JSON 到当前模板">导入当前简历</button>
           <button class="btn btn-outline" id="reloadResumeBtn">重新加载</button>
-          <button class="btn btn-primary" id="saveResumeBtn">保存标准简历</button>
+          <button class="btn btn-primary" id="saveResumeBtn">保存资料</button>
         </div>
       </header>
 
       <main class="editor-main">
-        <div class="tip" id="pageStatus">正在加载标准简历...</div>
+        <div class="tip" id="pageStatus">正在加载资料库...</div>
         <div class="resume-editor-layout resume-editor-layout-wide">
           <aside class="resume-nav" id="resumeNav"></aside>
           <div class="resume-form-host" id="resumeFormHost"></div>
@@ -44,23 +44,25 @@
             <div class="editor-import-header-icon">⬆</div>
             <div class="editor-import-header-copy">
               <div class="editor-import-title">导入辅助（可选）</div>
-              <div class="editor-import-desc">粘贴原始简历文本或上传 PDF，用 AI 预填标准字段，导入后请检查并保存。</div>
+              <div class="editor-import-desc">粘贴 Markdown、资料文本或上传 PDF。AI 动态识别全部信息，核对预览后批量添加；已有信息默认保留。</div>
             </div>
           </div>
           <div class="editor-import-body">
             <div class="form-group" style="margin-bottom:0">
-              <label for="resumeImportText">原始简历文本</label>
+              <label for="resumeImportText">Markdown / 原始资料</label>
               <textarea
                 id="resumeImportText"
                 class="textarea"
-                placeholder="粘贴原始简历文本，或上传 PDF 后自动填入这里。"
+                placeholder="粘贴 Markdown 或资料文本，或导入 .md / PDF 文件。"
               ></textarea>
             </div>
             <div class="action-row">
-              <button class="btn btn-primary" id="importResumeBtn">AI 导入到标准简历</button>
+              <button class="btn btn-primary" id="importResumeBtn">AI 解析并添加信息</button>
+              <button class="btn btn-outline" id="importLibraryMarkdownBtn">导入 Markdown 文件</button>
               <button class="btn btn-outline" id="uploadPdfBtn">上传 PDF 并导入</button>
             </div>
           </div>
+          <input type="file" id="libraryMarkdownFile" accept=".md,.markdown,text/markdown,text/plain" hidden />
           <input type="file" id="resumePdfFile" accept="application/pdf" hidden />
         </div>
       </main>
@@ -115,6 +117,7 @@
     <script src="shared/ai-client.js"></script>
     <script src="shared/resume-prompts.js"></script>
     <script src="shared/custom-fields-editor.js"></script>
+    <script src="shared/library-import.js"></script>
     <script src="resume-editor.js"></script>
   </body>
 </html>

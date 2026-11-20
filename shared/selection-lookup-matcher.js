@@ -4,7 +4,6 @@
   root.ResumeLookupMatcher = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   "use strict";
-  const EXPERIENCE_SECTIONS = ["educations", "internships", "workExperiences", "projects", "campusExperiences"];
   const RULES = [
     { aliases: ["学校名称", "毕业院校", "就读学校", "院校名称", "学校", "school", "university"], sections: ["educations"], keys: ["school"] },
     { aliases: ["就读年月", "在校时间", "就读时间", "教育时间", "教育经历时间"], sections: ["educations"], keys: ["startDate", "endDate"] },
@@ -64,46 +63,33 @@
     return { id, section, key, label, sourceName: `${source} · ${label}`, format,
       preview: copyValue.length > 160 ? `${copyValue.slice(0, 160)}…` : copyValue, copyValue };
   }
-  function sourceName(section, item, index, fallback) {
-    if (section === "educations") return [item.school, item.degree].filter(Boolean).join(" · ") || `${fallback} ${index + 1}`;
-    return item.name || item.company || item.organization || `${fallback} ${index + 1}`;
-  }
   function buildIndex(profile, schema) {
-    const items = [];
-    for (const section of schema?.sections || []) {
-      const records = section.type === "list" ? (Array.isArray(profile?.[section.key]) ? profile[section.key] : []) : [profile?.[section.key]];
-      records.forEach((record, index) => {
-        if (!record || typeof record !== "object") return;
-        const source = section.type === "list" ? sourceName(section.key, record, index, section.label) : section.label;
-        for (const field of section.fields) {
-          const item = candidate({ id: `field:${section.key}:${index}:${field.key}`, section: section.key, key: field.key,
-            label: field.label, source, value: record[field.key] });
-          if (item) items.push(item);
-        }
-      });
-    }
-    for (const section of ["personal", "additional"]) {
-      if (profile?.[section]?.selfEvaluation) {
-        const item = candidate({ id: `field:${section}:selfEvaluation`, section, key: "selfEvaluation", label: "自我评价",
-          source: section === "personal" ? "个人信息" : "补充信息", value: profile[section].selfEvaluation });
-        if (item) items.push(item);
-      }
-    }
-    for (const field of schema?.getCustomFieldCatalog?.(profile) || []) {
-      const item = candidate({ id: `field:${field.path}`, section: "customFields", key: field.customId,
-        label: field.label, source: field.group || "自定义信息", value: schema.getValueByPath(profile, field.path) });
-      if (item) items.push({ ...item, aliases: field.aliases });
-    }
-    return items;
+    return Array.from(schema?.getFieldCatalog?.({ profile }) || []).flatMap((field) => {
+      const inferred = ruleFor(field.label);
+      const roleKey = field.role === "start" ? "startDate" : field.role === "end" ? "endDate" : null;
+      const item = candidate({ id: `field:${field.path}`, section: scopeFor(field.sectionLabel)?.[0] || "customFields",
+        key: roleKey || (inferred?.keys.length === 1 ? inferred.keys[0] : field.label), label: field.label,
+        source: [field.sectionLabel, field.itemLabel].filter(Boolean).join(" · "), value: schema.getValueByPath(profile, field.path) });
+      return item ? [{ ...item, aliases: field.aliases, role: field.role }] : [];
+    });
   }
   function match(index, selectedText, context = "") {
     const query = normalize(selectedText), rule = ruleFor(query);
     if (!query) return [];
-    const sections = rule ? rule.sections || scopeFor(selectedText) || scopeFor(context) || EXPERIENCE_SECTIONS : [];
-    return index.filter((item) => {
-      if (item.section === "customFields") return [item.label, ...(item.aliases || [])].some((alias) => normalize(alias) === query);
-      return rule ? sections.includes(item.section) && rule.keys.includes(item.key) : normalize(item.label) === query;
+    const sections = rule?.sections || scopeFor(selectedText) || scopeFor(context);
+    const found = index.filter((item) => {
+      const exact = [item.label, ...(item.aliases || [])].some((alias) => normalize(alias) === query);
+      if (rule && ["startDate", "endDate"].some((v) => rule.keys.includes(v))) {
+        if (!rule.keys.includes(item.key)) return false;
+        return !sections || sections.includes(item.section) || (item.section === "customFields" && exact);
+      }
+      return exact || Boolean(rule && (!sections || sections.includes(item.section) || item.section === "customFields") && rule.keys.includes(item.key));
     });
+    if (rule?.keys.includes("startDate") && rule.keys.includes("endDate")) {
+      const itemId = (entry) => entry.id.split(".fields.")[0];
+      found.sort((a, b) => itemId(a) === itemId(b) ? (a.key === "startDate" ? 0 : 1) - (b.key === "startDate" ? 0 : 1) : 0);
+    }
+    return found;
   }
   function search(index, text) {
     const query = normalize(text);

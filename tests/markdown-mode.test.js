@@ -55,7 +55,7 @@ test("default mode keeps the original profile schema, editor, JSON and selection
 
 test("Markdown saves never modify structured templates or legacy data; field saves never modify Markdown", async () => {
   const structured = loadStructuredStorage();
-  const storage = memoryStorage({ resumeTemplates: { a: { id: "a", name: "原简历", profile: { personal: { fullName: "Alice" } }, rawText: "原始文本" } }, activeResumeTemplateId: "a", resumeProfile: { retained: true } });
+  const storage = memoryStorage({ resumeLibraryVersion: 1, resumeTemplates: { a: { id: "a", name: "原简历", profile: { personal: { fullName: "Alice" } }, rawText: "原始文本" } }, activeResumeTemplateId: "a", resumeProfile: { retained: true } });
   const before = structuredClone(storage.state);
   assert.equal(await markdownStorage.load("a", storage), "");
   assert.deepEqual(storage.state, before); // No automatic conversion, cleanup or migration.
@@ -260,40 +260,17 @@ test("Markdown editor retains separate template drafts, imports and exports with
   assert.equal(data.b, "# Bob"); assert.deepEqual(harness.errors, []);
 });
 
-test("Markdown-to-fields runs only on the conversion button and persists only after explicit preview confirmation", async () => {
+test("Markdown conversion delegates only on an explicit conversion click and never saves a document automatically", async () => {
   const harness = editorHarness(), { context, node, writes } = harness;
-  let aiCalls = 0, fieldWrites = 0;
-  const templates = [{ id: "a", profile: { personal: { fullName: "Before" } } }];
-  Object.assign(context, {
-    markdownEditor: null, markdownConversion: null, activeTemplateId: "a", isResumeDirty: false, isFilling: false,
-    schema: { version: 1, normalizeResumeProfile: (value) => value },
-    resumeStorage: {
-      loadTemplateState: async () => ({ templates }),
-      saveTemplateContent: async (id, content) => { fieldWrites++; assert.equal(id, "a"); templates[0].profile = content.profile; },
-    },
-    aiClient: { callAI: async (_id, _prompt, mode) => { aiCalls++; assert.equal(mode, "resume_import"); return '{"personal":{"fullName":"Alice"}}'; } },
-    resumePrompts: { buildResumeImportPrompt: (_schema, markdown) => markdown },
-    getActiveModel: async () => ({ id: "model" }), isModelConfigured: () => true,
-    parseJsonFromAiText: JSON.parse, addLog: (_type, message) => { if (_type === "error") harness.errors.push(message); },
-    updateStartFillAvailability() {}, openModal() {}, loadResumeProfile: async () => {},
+  let conversions = 0;
+  Object.assign(context, { markdownEditor: null, activeTemplateId: "a", updateStartFillAvailability() {}, addLog() {},
+    importResumeToSchema: async (text) => { conversions++; assert.equal(typeof text, "string"); },
   });
-  node("fillMethod").value = "fields";
   const popup = fs.readFileSync(path.join(__dirname, "../popup.js"), "utf8");
   vm.runInContext(popup.slice(popup.indexOf("function getFillMethod()")), context);
   context.initMarkdownMode(); await context.markdownEditor.load("a");
-  assert.equal(context.getFillMethod(), "fields"); assert.equal(aiCalls, 0); assert.equal(fieldWrites, 0);
-  await node("convertMarkdownBtn").click();
-  assert.equal(aiCalls, 1); assert.equal(fieldWrites, 0); assert.equal(writes.length, 0);
-  assert.equal(node("markdownConversion").hidden, false);
-  assert.match(node("markdownFieldsPreview").value, /Alice/);
-  await node("applyMarkdownFieldsBtn").click();
-  assert.equal(fieldWrites, 1); assert.equal(templates[0].profile.personal.fullName, "Alice");
-  assert.equal(writes.length, 0); assert.deepEqual(harness.errors, []);
-
-  await node("convertMarkdownBtn").click();
-  templates[0].profile.personal.fullName = "Changed in another editor";
-  await node("applyMarkdownFieldsBtn").click();
-  assert.equal(fieldWrites, 1); assert.equal(harness.errors.length, 1);
+  assert.equal(context.getFillMethod(), "fields"); assert.equal(conversions, 0);
+  await node("convertMarkdownBtn").click(); assert.equal(conversions, 1); assert.equal(writes.length, 0);
 });
 
 test("the original AI gateway supports all existing modes alongside the Markdown plan", async () => {

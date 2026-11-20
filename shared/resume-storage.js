@@ -4,8 +4,9 @@
   const keys = Object.freeze({
     // 多模板存储
     templates: "resumeTemplates",
+    libraryVersion: "resumeLibraryVersion",
     activeTemplateId: "activeResumeTemplateId",
-    // 旧版单模板 key（仅用于一次性迁移，迁移完成后清理）
+    // Legacy resume keys are removed, never restored automatically.
     profile: "resumeProfile",
     schemaVersion: "resumeSchemaVersion",
     rawText: "resumeImportRawText",
@@ -51,37 +52,6 @@
     return storage;
   }
 
-  function isMeaningfulProfile(value) {
-    return Boolean(
-      value &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        hasMeaningfulValue(value)
-    );
-  }
-
-  function hasMeaningfulValue(value) {
-    if (value == null) return false;
-    if (typeof value === "string") return value.trim().length > 0;
-    if (Array.isArray(value)) return value.some(hasMeaningfulValue);
-    if (typeof value === "object") {
-      return Object.values(value).some(hasMeaningfulValue);
-    }
-    return Boolean(value);
-  }
-
-  function pickStoredValue(candidates, { preferMeaningful = false } = {}) {
-    let fallback = { found: false, value: undefined };
-    for (const candidate of candidates) {
-      if (hasOwn(candidate.data, candidate.key)) {
-        const entry = { found: true, value: candidate.data[candidate.key] };
-        if (!preferMeaningful || isMeaningfulProfile(entry.value)) return entry;
-        fallback = entry;
-      }
-    }
-    return fallback;
-  }
-
   function normalizeTemplate(value, fallbackId) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const id = text(value.id) || fallbackId;
@@ -97,7 +67,7 @@
     return {
       id,
       name: text(value.name) || DEFAULT_TEMPLATE_NAME,
-      profile,
+      profile: root.ResumeSchema?.normalizeResumeProfile(profile) || profile,
       rawText: text(value.rawText),
       schemaVersion: value.schemaVersion,
       createdAt: text(value.createdAt) || nowIso(),
@@ -130,9 +100,9 @@
     return {
       id: id || makeId(),
       name: text(name) || DEFAULT_TEMPLATE_NAME,
-      profile: {},
+      profile: { groups: [] },
       rawText: "",
-      schemaVersion: undefined,
+      schemaVersion: 6,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -147,53 +117,9 @@
     }
   }
 
-  async function loadLegacyResumeData(storage) {
-    const localData = await storage.local.get(allLegacyKeys);
-    const needsSyncFallback =
-      !isMeaningfulProfile(localData[keys.profile]) ||
-      !hasOwn(localData, keys.rawText) ||
-      !hasOwn(localData, keys.schemaVersion);
-    const syncData =
-      needsSyncFallback && storage.sync?.get
-        ? await storage.sync.get(allLegacyKeys)
-        : {};
-
-    const profileEntry = pickStoredValue(
-      [
-        { data: localData, key: keys.profile },
-        { data: localData, key: keys.legacyProfile },
-        { data: syncData, key: keys.profile },
-        { data: syncData, key: keys.legacyProfile },
-      ],
-      { preferMeaningful: true }
-    );
-    const rawTextEntry = pickStoredValue([
-      { data: localData, key: keys.rawText },
-      { data: localData, key: keys.legacyRawText },
-      { data: syncData, key: keys.rawText },
-      { data: syncData, key: keys.legacyRawText },
-    ]);
-    const schemaVersionEntry = pickStoredValue([
-      { data: localData, key: keys.schemaVersion },
-      { data: syncData, key: keys.schemaVersion },
-    ]);
-
-    return {
-      profile:
-        profileEntry.found &&
-        profileEntry.value &&
-        typeof profileEntry.value === "object"
-          ? profileEntry.value
-          : {},
-      rawText: rawTextEntry.found ? String(rawTextEntry.value || "") : "",
-      schemaVersion: schemaVersionEntry.found
-        ? schemaVersionEntry.value
-        : undefined,
-    };
-  }
-
   function persistTemplates(storage, templates, activeTemplateId) {
     return storage.local.set({
+      [keys.libraryVersion]: 1,
       [keys.templates]: toTemplateMap(templates),
       [keys.activeTemplateId]: activeTemplateId,
     });
@@ -201,8 +127,15 @@
 
   async function loadTemplateState(storageOverride) {
     const storage = getStorage(storageOverride);
+    if (root.navigator?.locks?.request) return root.navigator.locks.request("resume-library-init", () => loadTemplateStateUnlocked(storage));
+    return loadTemplateStateUnlocked(storage);
+  }
+
+  async function loadTemplateStateUnlocked(storageOverride) {
+    const storage = getStorage(storageOverride);
     const localData = await storage.local.get([
       keys.templates,
+      keys.libraryVersion,
       keys.activeTemplateId,
       ...allLegacyKeys,
     ]);
@@ -210,19 +143,20 @@
     let templates = normalizeTemplateMap(localData[keys.templates]);
     let activeTemplateId = text(localData[keys.activeTemplateId]);
 
-    // 旧版单模板 → 迁移为默认模板
-    if (!hasOwn(localData, keys.templates)) {
-      const legacy = await loadLegacyResumeData(storage);
-      const migrated = buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME);
-      migrated.profile = legacy.profile;
-      migrated.rawText = legacy.rawText;
-      migrated.schemaVersion = legacy.schemaVersion;
-      templates = [migrated];
+    // New library format deliberately starts empty once.
+    if (localData[keys.libraryVersion] !== 1) {
+      templates = [buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME)];
       activeTemplateId = DEFAULT_TEMPLATE_ID;
-      await persistTemplates(storage, templates, activeTemplateId);
+      // Persist empty library and marker together; never restore legacy values.
+      await storage.local.set({
+        [keys.libraryVersion]: 1,
+        [keys.templates]: toTemplateMap(templates),
+        [keys.activeTemplateId]: activeTemplateId,
+        resumeMarkdownDocumentsV1: {},
+        fieldMappingCacheV3: {},
+      });
     }
 
-    // 保证至少有一个模板
     if (templates.length === 0) {
       templates = [buildEmptyTemplate(DEFAULT_TEMPLATE_ID, DEFAULT_TEMPLATE_NAME)];
       activeTemplateId = DEFAULT_TEMPLATE_ID;
@@ -237,7 +171,7 @@
 
     // 清理旧 key
     await removeIfAvailable(storage.local, allLegacyKeys);
-    await removeIfAvailable(storage.sync, allLegacyKeys);
+    await removeIfAvailable(storage.sync, [...allLegacyKeys, keys.templates, keys.activeTemplateId, "resumeMarkdownDocumentsV1"]);
 
     return { templates, activeTemplateId };
   }
@@ -366,11 +300,26 @@
     return {
       app: "ai-resume-form-filling-assistant",
       kind: "resume-templates",
-      version: 1,
+      version: 2,
       exportedAt: nowIso(),
       activeTemplateId: state.activeTemplateId,
       templates: state.templates,
     };
+  }
+
+  function assertLibraryProfile(profile) {
+    if (!Array.isArray(profile?.groups)) throw new Error("此 JSON 使用旧版字段结构，请通过 Markdown 重新解析添加；未修改当前资料");
+    for (const group of profile.groups) {
+      if (!group || typeof group.name !== "string" || !group.name.trim() || !Array.isArray(group.items)) throw new Error("JSON 分组格式不正确");
+      for (const item of group.items) {
+        if (!item || typeof item.name !== "string" || !item.name.trim() || !Array.isArray(item.fields)) throw new Error("JSON 条目格式不正确");
+        for (const field of item.fields) {
+          if (!field || typeof field.name !== "string" || !field.name.trim() || typeof field.value !== "string" || !["text", "textarea", "date"].includes(field.type)) throw new Error("JSON 字段格式不正确，请检查名称、内容与类型");
+        }
+      }
+    }
+    const validation = root.ResumeSchema?.validateProfile(profile);
+    if (validation) throw new Error(validation);
   }
 
   async function importTemplateData(data, storageOverride) {
@@ -390,6 +339,10 @@
       throw new Error("导入文件格式不正确：缺少 templates");
     }
 
+    for (const template of rawTemplates) {
+      if (!template || typeof template !== "object") throw new Error("JSON 模板格式不正确");
+      assertLibraryProfile(template.profile);
+    }
     let templates = rawTemplates
       .map((template, index) =>
         normalizeTemplate(
@@ -401,6 +354,7 @@
       )
       .filter(Boolean);
 
+    for (const template of templates) assertLibraryProfile(template.profile);
     const seen = new Set();
     templates = templates.filter((template) => {
       if (seen.has(template.id)) return false;
@@ -419,7 +373,7 @@
 
     await persistTemplates(storage, templates, activeTemplateId);
     await removeIfAvailable(storage.local, allLegacyKeys);
-    await removeIfAvailable(storage.sync, allLegacyKeys);
+    await removeIfAvailable(storage.sync, [...allLegacyKeys, keys.templates, keys.activeTemplateId, "resumeMarkdownDocumentsV1"]);
 
     return { templates, activeTemplateId };
   }
@@ -432,7 +386,7 @@
     return {
       app: "ai-resume-form-filling-assistant",
       kind: "resume-profile",
-      version: 1,
+      version: 2,
       exportedAt: nowIso(),
       name: active?.name || DEFAULT_TEMPLATE_NAME,
       profile: clone(active?.profile || {}),
@@ -454,6 +408,7 @@
       source.profile && typeof source.profile === "object" && !Array.isArray(source.profile)
         ? source.profile
         : null;
+    if (profile) assertLibraryProfile(profile);
     if (!profile) throw new Error("导入文件格式不正确：缺少 profile");
 
     const state = await loadTemplateState(storage);
@@ -462,7 +417,7 @@
     );
     const next = {
       ...(active || buildEmptyTemplate(state.activeTemplateId, DEFAULT_TEMPLATE_NAME)),
-      profile: clone(profile),
+      profile: root.ResumeSchema?.normalizeResumeProfile(profile) || clone(profile),
       rawText: text(source.rawText),
       schemaVersion: source.schemaVersion,
       updatedAt: nowIso(),

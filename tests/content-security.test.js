@@ -46,16 +46,18 @@ test("page URLs sent to the model exclude query and hash", () => {
 
 test("mapping paths are restricted to the schema catalog", () => {
   const helpers = loadContentSecurityHelpers();
+  const profile = require("./library-fixture.cjs").profileFor([{name: "邮箱", value: "a@example.test"}]);
+  const allowed = "groups.g-import-0.items.i-import-0-0.fields.f-import-0-0-0.value";
   const mappings = helpers.normalizeMappings(
     [
-      { fieldId: "f_1", resumePath: "personal.email" },
+      { fieldId: "f_1", resumePath: allowed },
       { fieldId: "f_2", resumePath: "../../apiKey" },
       { fieldId: "f_3", resumePath: "[object Object]" },
     ],
-    [{ fieldId: "f_1" }, { fieldId: "f_2" }, { fieldId: "f_3" }]
+    [{ fieldId: "f_1" }, { fieldId: "f_2" }, { fieldId: "f_3" }], profile
   );
 
-  assert.equal(mappings[0].resumePath, "personal.email");
+  assert.equal(mappings[0].resumePath, allowed);
   assert.equal(mappings[1].resumePath, "");
   assert.equal(mappings[2].resumePath, "");
 });

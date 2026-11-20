@@ -3,125 +3,44 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
-
-function loadResumeSchema() {
-  const source = fs.readFileSync(
-    path.join(__dirname, "../shared/resume-schema.js"),
-    "utf8"
-  );
-  const context = {
-    window: {},
-    console,
-    structuredClone: global.structuredClone,
-  };
-
-  vm.createContext(context);
-  vm.runInContext(source, context);
-
-  return context.window.ResumeSchema;
-}
-
-test("resume schema exposes campus recruiting education and experience fields", () => {
-  const schema = loadResumeSchema();
-  const catalog = schema.getFieldCatalog({ mode: "max" });
-  const template = JSON.parse(schema.createImportTemplateString());
-
-  assert.ok(catalog.some((field) => field.path === "educations.0.educationType"));
-  assert.ok(catalog.some((field) => field.path === "educations.0.studyMode"));
-  assert.ok(catalog.some((field) => field.path === "educations.0.laboratory"));
-  assert.ok(catalog.some((field) => field.path === "educations.0.researchDirection"));
-  assert.ok(catalog.some((field) => field.path === "educations.0.advisor"));
-  assert.ok(catalog.some((field) => field.path === "internships.0.company"));
-  assert.ok(catalog.some((field) => field.path === "campusExperiences.0.organization"));
-
-  assert.ok(Array.isArray(template.internships));
-  assert.ok(Array.isArray(template.campusExperiences));
-  assert.equal("educationType" in template.educations[0], true);
-  assert.equal("studyMode" in template.educations[0], true);
-  assert.equal("laboratory" in template.educations[0], true);
-  assert.equal("researchDirection" in template.educations[0], true);
-  assert.equal("advisor" in template.educations[0], true);
+const { loadSchema, plain, profileFor } = require("./library-fixture.cjs");
+const schema = loadSchema();
+test("the library starts with zero predefined groups, records or fields; legacy data is not normalized back in", () => {
+  assert.deepEqual(plain(schema.createEmptyResumeProfile()), { groups: [] });
+  assert.deepEqual(plain(schema.sections), []);
+  assert.equal(schema.getFieldCatalog().length, 0);
+  assert.deepEqual(plain(schema.normalizeResumeProfile({ personal: { fullName: "Legacy" }, customFields: [{ name: "old", value: "old" }] })), { groups: [] });
 });
-
-test("resume schema normalizes campus recruiting resume data", () => {
-  const schema = loadResumeSchema();
-  const normalized = schema.normalizeResumeProfile({
-    educations: [
-      {
-        school: "浙江大学",
-        educationType: "统招全日制",
-        studyMode: "联合培养",
-        laboratory: "CAD&CG 国家重点实验室",
-        researchDirection: ["AIGC", "多模态生成"],
-        advisor: "王老师",
-        studentId: 20231234,
-        academicSystem: 3,
-      },
-    ],
-    internships: [
-      {
-        company: "字节跳动",
-        title: "后端开发实习生",
-        description: ["负责推荐服务接口开发", "支持线上稳定性治理"],
-      },
-    ],
-    campusExperiences: [
-      {
-        organization: "浙江大学 ACM 协会",
-        category: "学生组织",
-        role: "技术负责人",
-        isCurrent: true,
-      },
-    ],
-  });
-
-  assert.equal(normalized.educations[0].educationType, "统招全日制");
-  assert.equal(normalized.educations[0].studyMode, "联合培养");
-  assert.equal(normalized.educations[0].laboratory, "CAD&CG 国家重点实验室");
-  assert.equal(normalized.educations[0].researchDirection, "AIGC, 多模态生成");
-  assert.equal(normalized.educations[0].advisor, "王老师");
-  assert.equal(normalized.educations[0].studentId, "20231234");
-  assert.equal(normalized.educations[0].academicSystem, "3");
-  assert.equal(normalized.internships[0].company, "字节跳动");
-  assert.equal(
-    normalized.internships[0].description,
-    "负责推荐服务接口开发, 支持线上稳定性治理"
-  );
-  assert.equal(normalized.campusExperiences[0].category, "学生组织");
-  assert.equal(normalized.campusExperiences[0].isCurrent, "是");
+test("arbitrary content, aliases and multiline values survive normalization with stable IDs", () => {
+  const profile = profileFor([{ name: "任意信息", aliases: " 网页别名，网页别名；第二别名 ", value: "第一行\n\n第三行\n", type: "textarea" }]);
+  assert.deepEqual(plain(schema.normalizeResumeProfile(profile)), profile);
+  assert.deepEqual(profile.groups[0].items[0].fields[0].aliases, ["网页别名", "第二别名"]);
+  assert.equal(schema.getCatalogWithValues(profile)[0].value, "第一行\n\n第三行\n");
+  profile.groups[0].items[0].fields[0].value = "";
+  assert.equal(schema.hasAnyFilledField(profile), false);
 });
-
-test("resume schema preserves flexible date precision and legacy aliases", () => {
-  const schema = loadResumeSchema();
-  const normalized = schema.normalizeResumeProfile({
-    personal: {
-      birthYearMonth: "2001/06",
-    },
-    contactAndLocation: {
-      nativePlace: "江西南昌",
-    },
-    identityAndAuthorization: {
-      idCardNumber: "362202200106265976",
-    },
-    educations: [
-      {
-        learningModality: "全国普通高等院校全日制",
-        schoolSystem: "2年及以上",
-        timeRange: "2021年09月 至 2025年06月",
-      },
-    ],
-  });
-
-  assert.equal(normalized.personal.birthDate, "2001-06");
-  assert.equal(normalized.contactAndLocation.hometownCity, "江西南昌");
-  assert.equal(normalized.contactAndLocation.hometownProvince, "江西南昌");
-  assert.equal(
-    normalized.identityAndAuthorization.personalIdNumber,
-    "362202200106265976"
-  );
-  assert.equal(normalized.identityAndAuthorization.personalIdType, "身份证");
-  assert.equal(normalized.educations[0].studyMode, "统招");
-  assert.equal(normalized.educations[0].academicSystem, "2年及以上");
-  assert.equal(normalized.educations[0].startDate, "2021-09");
-  assert.equal(normalized.educations[0].endDate, "2025-06");
+test("date precision and explicit 至今 are preserved; ranges and invalid dates fail validation", () => {
+  for (const value of ["2027", "2027/7", "2027-07-01", "至今"]) assert.equal(schema.validateProfile(profileFor([{ name: "日期", type: "date", value }])), "");
+  for (const value of ["2027-02-30", "2027-99", "2027-07 至 2028-07"]) assert.ok(schema.validateProfile(profileFor([{ name: "日期", type: "date", value }])));
+  assert.equal(profileFor([{ name: "日期", type: "date", value: "2027/7" }]).groups[0].items[0].fields[0].value, "2027-07");
+  assert.equal(schema.getCatalogWithValues(profileFor([{ name: "日期", type: "date", value: "2027" }]))[0].value, "2027");
+});
+test("stable value paths survive rename/reorder; metadata, prototype and unknown paths cannot be written", () => {
+  const profile = profileFor([{ name: "信息 A", value: "A" }, { name: "信息 B", value: "B" }]);
+  const field = schema.getFieldCatalog({ profile })[0], original = field.path;
+  profile.groups[0].name = "新分组"; profile.groups[0].items[0].fields.reverse();
+  assert.equal(schema.getValueByPath(profile, original), "A");
+  schema.setValueByPath(profile, original, "edited");
+  assert.equal(schema.getValueByPath(profile, original), "edited");
+  for (const path of [original.replace(/value$/, "name"), original.replace(/f-import-0-0-0/, "__proto__"), original.replace(/f-import-0-0-0/, "f-unknown"), "personal.email"]) {
+    schema.setValueByPath(profile, path, "bad"); assert.equal(schema.getValueByPath(profile, path), "");
+  }
+  assert.equal(profile.groups[0].items[0].fields[1].name, "信息 A");
+});
+test("duplicate imported IDs are repaired without losing any content", () => {
+  const profile = profileFor([{ id: "f-same", name: "a", value: "one" }, { id: "f-same", name: "b", value: "two" }, { id: "__proto__", name: "c", value: "three" }]);
+  const fields = profile.groups[0].items[0].fields;
+  assert.equal(new Set(fields.map((f) => f.id)).size, 3);
+  assert.ok(fields.every((f) => /^f-[a-z0-9-]+$/.test(f.id)));
+  assert.deepEqual(fields.map((f) => f.value), ["one", "two", "three"]);
 });
