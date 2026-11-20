@@ -180,6 +180,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initResumeEditorEvents();
   initTemplateEvents();
   initMarkdownMode();
+  await initSelectionLookupSetting();
   await initModels();
   await refreshLogExportStatus();
   await loadResumeProfile();
@@ -2104,4 +2105,30 @@ function renderMarkdownFillReport(report) {
     host.appendChild(row);
   }
   host.hidden = false;
+}
+
+async function initSelectionLookupSetting() {
+  const key = window.ResumeLookupRegistration.SETTINGS_KEY;
+  const toggle = document.getElementById("selectionLookupEnabled");
+  const status = document.getElementById("selectionLookupStatus");
+  toggle.disabled = true;
+  try { toggle.checked = (await chrome.storage.local.get(key))[key] === true; }
+  catch (_) { status.textContent = "无法读取选词查简历设置，请重新加载插件"; }
+  finally { toggle.disabled = false; }
+  toggle.addEventListener("change", async () => {
+    const requested = toggle.checked; toggle.disabled = true; status.textContent = "正在更新…";
+    try {
+      const response = await chrome.runtime.sendMessage({ action: "setSelectionLookupEnabled", enabled: requested });
+      if (!response?.success) throw new Error(response?.error || "无法更新设置，请重新加载插件");
+      toggle.checked = response.enabled === true;
+      status.textContent = toggle.checked ? "已开启。在网页选中文字后即可查看；受限页面不支持。" : "已关闭选词查简历。";
+    } catch (error) {
+      try { toggle.checked = (await chrome.storage.local.get(key))[key] === true; }
+      catch (_) { toggle.checked = !requested; }
+      status.textContent = error.message;
+    } finally { toggle.disabled = false; }
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[key] && !toggle.disabled) toggle.checked = changes[key].newValue === true;
+  });
 }

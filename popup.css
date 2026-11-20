@@ -1201,3 +1201,6 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
+
+.lookup-setting { display: flex; align-items: center; gap: 8px; }
+.lookup-setting input[type="checkbox"] { width: auto; accent-color: #3b6ed6; }

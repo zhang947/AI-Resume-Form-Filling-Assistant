@@ -247,7 +247,7 @@
         <div class="modal-backdrop" id="closeSettingsBackdrop"></div>
         <div class="modal-content">
           <div class="modal-header">
-            <h3>DeepSeek / OpenAI 兼容模型配置</h3>
+            <h3>插件设置</h3>
             <button class="icon-btn" id="closeSettingsBtn">
               <svg
                 width="20"
@@ -266,6 +266,12 @@
             </button>
           </div>
           <div class="modal-body">
+            <div class="section-block">
+              <label class="lookup-setting"><input type="checkbox" id="selectionLookupEnabled" /> 开启选词查简历</label>
+              <p class="tip">默认关闭。开启后，在网页拖动选中文字，即可查看当前模板已保存的相关资料。点击候选仅复制，由你自行粘贴；本功能不调用 AI。</p>
+              <p class="tip" id="selectionLookupStatus" role="status"></p>
+            </div>
+            <div class="section-header section-header-normal"><span>模型配置</span></div>
             <div class="model-list" id="modelList"></div>
             <button class="btn btn-outline btn-block" id="addModelBtn">
               <svg
@@ -414,6 +420,7 @@
     <script src="shared/form-plan.js"></script>
     <script src="shared/markdown-storage.js"></script>
     <script src="shared/markdown-editor.js"></script>
+    <script src="shared/selection-lookup-registration.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
