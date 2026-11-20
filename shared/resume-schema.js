@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  if (window.ResumeSchema) return;
+  if (window.ResumeSchema?.version >= 5) return;
 
   const SELECT_ALIAS_GROUPS = [
     { values: ["男", "male", "man", "m"] },
@@ -558,6 +558,7 @@
       }
     }
 
+    profile.customFields = [];
     return profile;
   }
 
@@ -570,6 +571,10 @@
 
   function getValueByPath(obj, path) {
     const segments = String(path || "").split(".").filter(Boolean);
+    if (segments[0] === "customFields") {
+      if (segments.length !== 3 || segments[2] !== "value") return "";
+      return normalizeCustomFields(obj?.customFields).find((field) => field.id === segments[1])?.value || "";
+    }
     let current = obj;
     for (const segment of segments) {
       if (current == null) return "";
@@ -581,6 +586,13 @@
   function setValueByPath(obj, path, rawValue) {
     const segments = String(path || "").split(".").filter(Boolean);
     if (segments.length === 0) return;
+    if (segments[0] === "customFields") {
+      if (segments.length !== 3 || segments[2] !== "value") return;
+      const fields = normalizeCustomFields(obj.customFields);
+      const field = fields.find((item) => item.id === segments[1]);
+      if (field) { field.value = String(rawValue ?? ""); obj.customFields = fields; }
+      return;
+    }
 
     let current = obj;
     for (let index = 0; index < segments.length; index += 1) {
@@ -847,8 +859,58 @@
       }
     }
 
+    profile.customFields = normalizeCustomFields(source.customFields);
     applyDerivedProfileValues(profile);
     return profile;
+  }
+
+  function normalizeCustomFields(value) {
+    if (!Array.isArray(value)) return [];
+    const used = new Set();
+    return value.filter((item) => item && typeof item === "object" && !Array.isArray(item)).map((item, index) => {
+      let id = String(item.id || "").trim();
+      if (!/^cf-[a-z0-9-]+$/.test(id) || used.has(id)) {
+        id = `cf-import-${index}`;
+        while (used.has(id)) id += "-copy";
+      }
+      used.add(id);
+      const type = ["text", "textarea", "date"].includes(item.type) ? item.type : "text";
+      const aliases = (Array.isArray(item.aliases) ? item.aliases : [item.aliases || ""])
+        .filter((alias) => typeof alias === "string").flatMap((alias) => alias.split(/[\n,，;；、]+/)).map((alias) => alias.trim()).filter(Boolean);
+      const raw = ["string", "number", "boolean"].includes(typeof item.value) ? String(item.value) : "";
+      return { id, name: String(item.name || "").trim(), group: String(item.group || "").trim(),
+        aliases: [...new Set(aliases)], type, value: type === "date" ? normalizeDateValue(raw) : raw };
+    });
+  }
+
+  function createCustomField(input = {}) {
+    const unique = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    return normalizeCustomFields([{ ...input, id: `cf-${unique}` }])[0];
+  }
+
+  function validateCustomFields(value) {
+    for (const field of normalizeCustomFields(value)) {
+      if (!field.name) return "请填写自定义信息的名称";
+      if (field.type === "text" && /[\r\n]/.test(field.value)) return `“${field.name}”包含换行，请改用多行文本类型`;
+      if (field.type === "date" && field.value && field.value !== "至今") {
+        const date = field.value;
+        if (!/^\d{4}(?:-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?)?$/.test(date)) return `“${field.name}”请填写单个日期（YYYY、YYYY-MM 或 YYYY-MM-DD），或“至今”`;
+        if (date.length === 10 && (!Number.isFinite(Date.parse(date + "T00:00:00Z")) || new Date(date + "T00:00:00Z").toISOString().slice(0, 10) !== date)) return `“${field.name}”的日期无效，请核对`;
+      }
+    }
+    return "";
+  }
+
+  function getCustomFieldCatalog(profile) {
+    return normalizeCustomFields(profile?.customFields).filter((field) => field.name).map((field) => ({
+      path: `customFields.${field.id}.value`, customId: field.id, sectionKey: "customFields", sectionLabel: "自定义信息",
+      itemLabel: field.group || "未分组", group: field.group, label: field.name, aliases: field.aliases, input: field.type, placeholder: "", options: [],
+    }));
+  }
+
+  function getCustomFieldsFingerprint(profile) {
+    const fields = normalizeCustomFields(profile?.customFields);
+    return fields.length ? JSON.stringify(fields) : "";
   }
 
   function getFieldCatalog(options = {}) {
@@ -902,7 +964,7 @@
       }
     }
 
-    return fields;
+    return fields.concat(getCustomFieldCatalog(profile));
   }
 
   function isMeaningfulValue(value) {
@@ -942,13 +1004,18 @@
   }
 
   window.ResumeSchema = {
-    version: 4,
+    version: 5,
     sections: SECTION_DEFINITIONS,
     clone,
     getSectionDefinition,
     createEmptyListItem,
     createEmptyResumeProfile,
     normalizeResumeProfile,
+    normalizeCustomFields,
+    createCustomField,
+    validateCustomFields,
+    getCustomFieldCatalog,
+    getCustomFieldsFingerprint,
     getFieldCatalog,
     getCatalogWithValues,
     getValueByPath,

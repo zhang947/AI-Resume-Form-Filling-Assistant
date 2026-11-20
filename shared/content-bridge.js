@@ -11,7 +11,7 @@
   function () {
     "use strict";
 
-    const CONTENT_SCRIPT_VERSION = "2026-11-19-optional-markdown-v6";
+    const CONTENT_SCRIPT_VERSION = "2026-11-20-custom-fields-v7";
 
     function contentScriptHasDiagnosticsSupport(status) {
       return Boolean(

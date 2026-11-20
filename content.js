@@ -234,7 +234,7 @@
       }
 
       const cacheSignature = createMappingCacheSignature(scan.fields);
-      const cacheKey = createMappingCacheKeyFromSignature(cacheSignature);
+      const cacheKey = createMappingCacheKey(scan.fields, resumeProfile);
       let mappings = null;
       let cacheHit = false;
 
@@ -245,7 +245,7 @@
       });
       const cachedEntry = cacheLookup.entry;
       if (cachedEntry?.mappings?.length) {
-        mappings = normalizeMappings(cachedEntry.mappings, scan.fields);
+        mappings = normalizeMappings(cachedEntry.mappings, scan.fields, resumeProfile);
         cacheHit = true;
         sendLog("info", "已命中本地字段映射缓存，跳过模型调用。");
       } else {
@@ -262,7 +262,7 @@
           "field_mapping"
         );
         const parsed = parseJsonFromAiText(aiText);
-        mappings = normalizeMappings(parsed?.mappings, scan.fields);
+        mappings = normalizeMappings(parsed?.mappings, scan.fields, resumeProfile);
 
         await saveMappingCacheEntry(cacheKey, {
           updatedAt: Date.now(),
@@ -688,6 +688,7 @@
         sectionLabel: field.sectionLabel,
         itemLabel: field.itemLabel || "",
         input: field.input,
+        aliases: field.aliases || [],
         hasValue: field.hasValue,
         valuePreview: field.valuePreview,
         options: field.options || [],
@@ -725,9 +726,11 @@
   }
 
   function normalizeMappings(rawMappings, fields) {
+    // Optional third argument preserves compatibility with existing mapping callers.
+    const resumeProfile = arguments[2] || null;
     const validFieldIds = new Set(fields.map((field) => String(field.fieldId)));
     const validResumePaths = new Set(
-      schema.getFieldCatalog({ mode: "max" }).map((field) => field.path)
+      schema.getFieldCatalog({ mode: "max", profile: resumeProfile }).map((field) => field.path)
     );
     const normalized = [];
 
@@ -2417,8 +2420,10 @@
     );
   }
 
-  function createMappingCacheKey(fields) {
-    return createMappingCacheKeyFromSignature(createMappingCacheSignature(fields));
+  function createMappingCacheKey(fields, resumeProfile = null) {
+    const base = createMappingCacheKeyFromSignature(createMappingCacheSignature(fields));
+    const fingerprint = resumeProfile ? schema.getCustomFieldsFingerprint(resumeProfile) : "";
+    return base + (fingerprint ? `:custom-${hashString(fingerprint)}` : "");
   }
 
   function createMappingCacheKeyFromSignature(signature) {

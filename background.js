@@ -70,7 +70,7 @@ async function callAI(modelId, prompt, mode) {
 
 你的任务：
 1) 为每个页面 field 选择最合适的 resumePath
-2) 只做“字段映射”，不要生成最终填写值
+2) 只做“字段映射”，不要生成最终填写值；customFields.* 是用户保存的自定义字段，综合 label、aliases、itemLabel 判断，只使用已存在的路径
 3) 若字段需要简单转换，可返回 transform
 4) 若没有合适字段，resumePath 返回空字符串
 5) 只输出 JSON（不要输出其它文本，不要 Markdown 代码块）

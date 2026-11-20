@@ -1204,3 +1204,16 @@ body {
 
 .lookup-setting { display: flex; align-items: center; gap: 8px; }
 .lookup-setting input[type="checkbox"] { width: auto; accent-color: #3b6ed6; }
+
+.custom-fields-section { padding: 16px; }
+.custom-field-head, .custom-field-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.custom-field-head { justify-content: space-between; }
+.custom-field-card { padding: 16px; border: 1px solid #dbe3ef; border-radius: 10px; margin: 12px 0; background: #fff; }
+.custom-field-title { overflow-wrap: anywhere; }
+.custom-field-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.custom-field-control { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.custom-fields-error { color: #b42318; }
+@media (max-width: 600px) { .custom-field-metadata { grid-template-columns: 1fr; } }
+
+.custom-fields-section [hidden] { display: none !important; }
+.custom-field-metadata .resume-textarea { min-height: 64px; }

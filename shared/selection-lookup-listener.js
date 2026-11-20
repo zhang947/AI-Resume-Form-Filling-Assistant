@@ -13,7 +13,7 @@
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function (ownership) {
   "use strict";
-  const VERSION = "selection-lookup-single-owner-v2";
+  const VERSION = "selection-lookup-custom-fields-v3";
   const SETTINGS_KEY = "resumeSelectionLookupEnabled";
   const DATA_KEYS = ["resumeTemplates", "activeResumeTemplateId", "resumeProfile", "resumeStructured"];
   const meaningful = (profile) => profile && typeof profile === "object" &&

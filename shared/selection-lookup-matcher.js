@@ -89,20 +89,25 @@
         if (item) items.push(item);
       }
     }
+    for (const field of schema?.getCustomFieldCatalog?.(profile) || []) {
+      const item = candidate({ id: `field:${field.path}`, section: "customFields", key: field.customId,
+        label: field.label, source: field.group || "自定义信息", value: schema.getValueByPath(profile, field.path) });
+      if (item) items.push({ ...item, aliases: field.aliases });
+    }
     return items;
   }
   function match(index, selectedText, context = "") {
     const query = normalize(selectedText), rule = ruleFor(query);
     if (!query) return [];
-    if (rule) {
-      const sections = rule.sections || scopeFor(selectedText) || scopeFor(context) || EXPERIENCE_SECTIONS;
-      return index.filter((item) => sections.includes(item.section) && rule.keys.includes(item.key));
-    }
-    return index.filter((item) => normalize(item.label) === query);
+    const sections = rule ? rule.sections || scopeFor(selectedText) || scopeFor(context) || EXPERIENCE_SECTIONS : [];
+    return index.filter((item) => {
+      if (item.section === "customFields") return [item.label, ...(item.aliases || [])].some((alias) => normalize(alias) === query);
+      return rule ? sections.includes(item.section) && rule.keys.includes(item.key) : normalize(item.label) === query;
+    });
   }
   function search(index, text) {
     const query = normalize(text);
-    return index.filter((item) => !query || normalize(`${item.sourceName}\n${item.copyValue}`).includes(query));
+    return index.filter((item) => !query || normalize(`${item.sourceName}\n${(item.aliases || []).join(" ")}\n${item.copyValue}`).includes(query));
   }
 
   return Object.freeze({ normalize, ruleFor, buildIndex, match, search });

@@ -68,8 +68,10 @@ let activeTemplateId = null;
 let isLoadingResume = false;
 let templateNameMode = null;
 const collapsedResumeSections = new Set();
+let customFieldsEditor = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
+  customFieldsEditor = window.ResumeCustomFieldsEditor.create({ document, host: resumeFormHost, nav: resumeNavEl, schema, onChange: markResumeDirty });
   initResumeEditorEvents();
   initTemplateEvents();
   await initModels();
@@ -175,7 +177,7 @@ async function switchActiveTemplate(id) {
   if (!id || id === activeTemplateId) return;
 
   if (isResumeDirty) {
-    await persistResumeProfile({ silent: true });
+    if (await persistResumeProfile({ silent: true }) === false) { renderTemplateSelectors(); return; }
   }
 
   await resumeStorage.setActiveTemplateId(id);
@@ -224,7 +226,7 @@ async function handleSaveTemplateName() {
       updatePageStatus("success", "已重命名模板");
     } else {
       if (isResumeDirty) {
-        await persistResumeProfile({ silent: true });
+        if (await persistResumeProfile({ silent: true }) === false) return;
       }
       const template = await resumeStorage.createTemplate(name);
       await resumeStorage.setActiveTemplateId(template.id);
@@ -241,6 +243,7 @@ async function handleSaveTemplateName() {
 }
 
 async function handleExportTemplates() {
+  if (isResumeDirty && await persistResumeProfile({ silent: true }) === false) return;
   const payload = await resumeStorage.exportTemplateData();
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
@@ -277,7 +280,7 @@ async function handleImportTemplates() {
 }
 
 async function handleExportResumeJson() {
-  await persistResumeProfile({ silent: true });
+  if (await persistResumeProfile({ silent: true }) === false) return;
   const payload = await resumeStorage.exportActiveTemplateData();
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -316,7 +319,7 @@ function readFileAsText(file) {
 
 async function handleDuplicateTemplate() {
   if (isResumeDirty) {
-    await persistResumeProfile({ silent: true });
+    if (await persistResumeProfile({ silent: true }) === false) return;
   }
 
   try {
@@ -517,6 +520,7 @@ function renderResumeEditor(profile) {
     sectionEl.appendChild(bodyEl);
     resumeFormHost.appendChild(sectionEl);
   }
+  customFieldsEditor?.render(profile.customFields || []);
 }
 
 function renderResumeNav(sectionStats) {
@@ -668,6 +672,7 @@ function createResumeNavSummary(section, stats) {
 
 function collectResumeProfileFromForm() {
   const nextProfile = schema.createEmptyResumeProfile();
+  nextProfile.customFields = customFieldsEditor?.collect() || resumeProfile.customFields || [];
   const controls = resumeFormHost.querySelectorAll("[data-resume-path]");
 
   controls.forEach((control) => {
@@ -787,6 +792,8 @@ function removeResumeListItem(sectionKey, itemIndex) {
 }
 
 async function persistResumeProfile({ silent = false } = {}) {
+  const customError = customFieldsEditor?.validate();
+  if (customError) { updatePageStatus("warning", customError); return false; }
   const nextProfile = collectResumeProfileFromForm();
 
   resumeProfile = nextProfile;
@@ -857,6 +864,7 @@ resumePdfFileEl.addEventListener("change", async () => {
 
 async function importResumeToSchema(rawText) {
   if (isImporting) return;
+  const importTemplateId = activeTemplateId;
 
   const text = String(rawText || "").trim();
   if (!text) {
@@ -883,7 +891,10 @@ async function importResumeToSchema(rawText) {
     );
     const aiText = await aiClient.callAI(activeModel.id, prompt, "resume_import");
     const parsed = parseJsonFromAiText(aiText);
-    const normalized = schema.normalizeResumeProfile(parsed);
+    if (activeTemplateId !== importTemplateId) throw new Error("模板已切换，请重新导入");
+    const normalized = schema.normalizeResumeProfile({ ...parsed, customFields: customFieldsEditor?.collect() || resumeProfile.customFields || [] });
+    const customError = schema.validateCustomFields(normalized.customFields);
+    if (customError) throw new Error(customError);
 
     resumeProfile = normalized;
     await resumeStorage.saveTemplateContent(activeTemplateId, {

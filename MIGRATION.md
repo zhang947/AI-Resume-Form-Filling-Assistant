@@ -7,9 +7,9 @@
 - 此分支直接基于 `76c052d`，只移植其独立的全表答案规划思路及校验模块。原目录保持在 `6d34d30`，未执行 reset、clean 或推送。
 - 原仓库的 `.git` 只读，不能登记工作树；在 `agent-workspace/optional-markdown-ai` 建立独立 Git 仓库，保留原历史对象，并创建 `feat/optional-markdown-ai` 分支。
 
-## 保留范围
+## 初次 Markdown 移植的保留范围（bcb0204）
 
-以下核心文件与原版一致：`shared/resume-schema.js`、`shared/resume-storage.js`、`shared/model-storage.js`、`shared/resume-prompts.js`、`resume-editor.html/js/css`、模板管理界面及 `modules/`。原有测试文件全部保留。
+以下核心文件与原版一致：`shared/resume-schema.js`、`shared/resume-storage.js`、`shared/model-storage.js`、`shared/resume-prompts.js`、`resume-editor.html/js/css`、模板管理界面及 `modules/`。原有测试文件全部保留。后续的[自定义信息功能](CUSTOM_FIELDS.md)在此基础上扩展了字段目录和编辑器。
 
 默认仍走 `resumeProfile → field_mapping → resumePath → 原控件填写`，映射缓存继续使用原键。原来的选区填写仍可在固定字段模式使用。没有将字段库转换为 Markdown，也没有新增选区功能。
 

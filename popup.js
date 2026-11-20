@@ -140,6 +140,7 @@ let activeTemplateId = null;
 let isLoadingResume = false;
 let templateNameMode = null;
 const collapsedResumeSections = new Set();
+let customFieldsEditor = null;
 let logProjectRootHandle = null;
 let activeFillSession = null;
 
@@ -177,6 +178,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   initTabs();
   initModalEvents();
   initLogExportEvents();
+  customFieldsEditor = window.ResumeCustomFieldsEditor.create({ document, host: resumeFormHost, nav: resumeNavEl, schema, onChange: markResumeDirty });
   initResumeEditorEvents();
   initTemplateEvents();
   initMarkdownMode();
@@ -730,7 +732,7 @@ async function switchActiveTemplate(id) {
   if (!id || id === activeTemplateId) return;
 
   if (isResumeDirty) {
-    await persistResumeProfile({ silent: true });
+    if (await persistResumeProfile({ silent: true }) === false) { renderTemplateSelectors(); return; }
   }
 
   await resumeStorage.setActiveTemplateId(id);
@@ -780,7 +782,7 @@ async function handleSaveTemplateName() {
       addLog("success", "已重命名模板");
     } else {
       if (isResumeDirty) {
-        await persistResumeProfile({ silent: true });
+        if (await persistResumeProfile({ silent: true }) === false) return;
       }
       const template = await resumeStorage.createTemplate(name);
       await resumeStorage.setActiveTemplateId(template.id);
@@ -798,6 +800,7 @@ async function handleSaveTemplateName() {
 }
 
 async function handleExportTemplates() {
+  if (isResumeDirty && await persistResumeProfile({ silent: true }) === false) return;
   const payload = await resumeStorage.exportTemplateData();
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
@@ -835,7 +838,7 @@ async function handleImportTemplates() {
 }
 
 async function handleExportResumeJson() {
-  await persistResumeProfile({ silent: true });
+  if (await persistResumeProfile({ silent: true }) === false) return;
   const payload = await resumeStorage.exportActiveTemplateData();
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -875,7 +878,7 @@ function readFileAsText(file) {
 
 async function handleDuplicateTemplate() {
   if (isResumeDirty) {
-    await persistResumeProfile({ silent: true });
+    if (await persistResumeProfile({ silent: true }) === false) return;
   }
 
   try {
@@ -1058,6 +1061,7 @@ function renderResumeEditor(profile) {
     sectionEl.appendChild(bodyEl);
     resumeFormHost.appendChild(sectionEl);
   }
+  customFieldsEditor?.render(profile.customFields || []);
 }
 
 function renderResumeSummary(sectionStats) {
@@ -1229,6 +1233,7 @@ function createResumeNavSummary(section, stats) {
 
 function collectResumeProfileFromForm() {
   const nextProfile = schema.createEmptyResumeProfile();
+  nextProfile.customFields = customFieldsEditor?.collect() || resumeProfile.customFields || [];
   const controls = resumeFormHost.querySelectorAll("[data-resume-path]");
 
   controls.forEach((control) => {
@@ -1348,6 +1353,8 @@ function removeResumeListItem(sectionKey, itemIndex) {
 }
 
 async function persistResumeProfile({ silent = false } = {}) {
+  const customError = customFieldsEditor?.validate();
+  if (customError) { addLog("warning", customError); return false; }
   const nextProfile = collectResumeProfileFromForm();
 
   resumeProfile = nextProfile;
@@ -1421,6 +1428,7 @@ resumePdfFileEl.addEventListener("change", async () => {
 
 async function importResumeToSchema(rawText) {
   if (isImporting) return;
+  const importTemplateId = activeTemplateId;
 
   const text = String(rawText || "").trim();
   if (!text) {
@@ -1448,7 +1456,10 @@ async function importResumeToSchema(rawText) {
     );
     const aiText = await aiClient.callAI(activeModel.id, prompt, "resume_import");
     const parsed = parseJsonFromAiText(aiText);
-    const normalized = schema.normalizeResumeProfile(parsed);
+    if (activeTemplateId !== importTemplateId) throw new Error("模板已切换，请重新导入");
+    const normalized = schema.normalizeResumeProfile({ ...parsed, customFields: customFieldsEditor?.collect() || resumeProfile.customFields || [] });
+    const customError = schema.validateCustomFields(normalized.customFields);
+    if (customError) throw new Error(customError);
 
     resumeProfile = normalized;
     await resumeStorage.saveTemplateContent(activeTemplateId, {
@@ -1557,7 +1568,7 @@ async function runFill(actionKey) {
   const markdownSnapshot = markdownMode ? markdownEditor?.getMarkdown() : undefined;
   if (markdownMode && (actionKey === "selection" || markdownEditor?.isBusy())) return;
   if (!markdownMode && isResumeDirty) {
-    await persistResumeProfile({ silent: true });
+    if (await persistResumeProfile({ silent: true }) === false) return;
   }
 
   if (markdownMode ? !markdownEditor?.getMarkdown().trim() : !schema.hasAnyFilledField(resumeProfile)) {
@@ -2059,7 +2070,7 @@ function initMarkdownMode() {
       if (id !== activeTemplateId) throw new Error("模板已切换，请重新转换");
       const parsed = parseJsonFromAiText(result);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("转换结果不是有效的字段对象");
-      const profile = schema.normalizeResumeProfile(parsed);
+      const profile = schema.normalizeResumeProfile({ ...parsed, customFields: before.customFields || [] });
       markdownConversion = { id, profile, before: JSON.stringify(before) };
       document.getElementById("markdownFieldsPreview").value = JSON.stringify(profile, null, 2);
       document.getElementById("markdownConversion").hidden = false;
