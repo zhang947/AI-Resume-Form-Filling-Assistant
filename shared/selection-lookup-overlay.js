@@ -69,7 +69,7 @@
       for (const candidate of candidates.slice(0, 100)) {
         const row = doc.createElement("div"); row.className = "row";
         const button = doc.createElement("button"); button.type = "button"; button.className = "candidate";
-        const source = doc.createElement("span"); source.className = "source"; source.textContent = `${candidate.sourceName} · ${candidate.format}`;
+        const source = doc.createElement("span"); source.className = "source"; source.textContent = candidate.sourceName;
         const preview = doc.createElement("span"); preview.className = "preview"; preview.textContent = candidate.preview;
         const status = doc.createElement("span"); status.className = "copy-status"; status.setAttribute("role", "status"); status.textContent = "点击复制";
         button.append(source, preview, status); row.appendChild(button);

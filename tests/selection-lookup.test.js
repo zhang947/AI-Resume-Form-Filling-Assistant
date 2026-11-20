@@ -269,7 +269,7 @@ test("no-match overlay provides manual search and does not render resume text as
   input.value = "项目 B"; await input.emit("input");
   assert.ok(h.find("candidate").length > 0);
   h.show([{ id: "unsafe", sourceName: "<img onerror=bad()>", preview: "<script>bad()</script>", copyValue: "<script>bad()</script>", format: "字段" }]);
-  assert.equal(h.find("source")[0].textContent, "<img onerror=bad()> · 字段");
+  assert.equal(h.find("source")[0].textContent, "<img onerror=bad()>");
   assert.equal(h.all().some((node) => ["SCRIPT", "IMG"].includes(node.tagName)), false);
 });
 
