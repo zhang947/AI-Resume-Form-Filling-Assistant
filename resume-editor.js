@@ -4,6 +4,7 @@ const saveResumeBtn = document.getElementById("saveResumeBtn");
 const reloadResumeBtn = document.getElementById("reloadResumeBtn");
 const clearResumeBtn = document.getElementById("clearResumeBtn");
 const enrichAliasesBtn = document.getElementById("enrichAliasesBtn");
+const aliasPreviewHost = document.getElementById("aliasPreviewHost");
 const resumeImportTextEl = document.getElementById("markdownEditor");
 const importResumeBtn = document.getElementById("convertMarkdownBtn");
 const uploadPdfBtn = document.getElementById("uploadPdfBtn");
@@ -729,7 +730,7 @@ async function handleEnrichAliases() {
       isCurrent: () => activeTemplateId === targetId && !isResumeDirty && !isClearingResume,
       onProgress: ({ completed, total }) => { enrichAliasesBtn.textContent = `补充中 ${completed}/${total}...`; },
     });
-    window.ResumeAliasEnrichment.preview({ document, host: resumeFormHost.parentElement, plan,
+    window.ResumeAliasEnrichment.preview({ document, host: aliasPreviewHost, plan,
       async onApply(selected) {
         const fresh = await resumeStorage.loadTemplateState();
         const current = fresh.templates.find((t) => t.id === targetId);

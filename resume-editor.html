@@ -27,7 +27,6 @@
           <button class="btn btn-outline btn-sm" id="exportResumeJsonBtn" title="导出当前资料库 JSON">导出当前简历</button>
           <button class="btn btn-outline btn-sm" id="importResumeJsonBtn" title="导入资料库 JSON 到当前模板">导入当前简历</button>
           <button class="btn btn-outline" id="reloadResumeBtn">重新加载</button>
-          <button class="btn btn-outline btn-sm" id="enrichAliasesBtn">AI 补充别名</button>
           <button class="btn btn-outline btn-clear-resume" id="clearResumeBtn" title="清空当前模板的全部分组、条目和字段；Markdown 资料保留">清空当前资料</button>
           <button class="btn btn-primary" id="saveResumeBtn">保存资料</button>
         </div>
@@ -61,6 +60,7 @@
             </div>
             <div class="action-row markdown-analysis-actions">
               <button type="button" id="convertMarkdownBtn" class="btn btn-primary">AI 解析并添加到资料库</button>
+              <button type="button" id="enrichAliasesBtn" class="btn btn-outline">AI 补充别名</button>
               <button type="button" class="btn btn-outline" id="uploadPdfBtn">上传 PDF 并解析</button>
             </div>
             <input type="file" id="resumePdfFile" accept="application/pdf" hidden />
@@ -68,6 +68,7 @@
           </div>
         </section>
 
+        <div class="alias-preview-host" id="aliasPreviewHost"></div>
       </main>
     </div>
 

@@ -137,6 +137,15 @@ body.resume-editor-page {
   gap: 20px;
 }
 
+/* Keep alias previews outside the grid that bounds the sticky side nav. */
+.alias-preview-host {
+  min-width: 0;
+}
+
+.alias-preview-host:empty {
+  display: none;
+}
+
 /* ─── Side Nav ───────────────────────────────────────────────────────────── */
 .resume-nav {
   position: sticky;
