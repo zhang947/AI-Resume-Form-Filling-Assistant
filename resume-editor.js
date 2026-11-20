@@ -3,6 +3,7 @@ const resumeFormHost = document.getElementById("resumeFormHost");
 const saveResumeBtn = document.getElementById("saveResumeBtn");
 const reloadResumeBtn = document.getElementById("reloadResumeBtn");
 const clearResumeBtn = document.getElementById("clearResumeBtn");
+const enrichAliasesBtn = document.getElementById("enrichAliasesBtn");
 const resumeImportTextEl = document.getElementById("markdownEditor");
 const importResumeBtn = document.getElementById("convertMarkdownBtn");
 const uploadPdfBtn = document.getElementById("uploadPdfBtn");
@@ -62,6 +63,7 @@ const RESUME_LEGACY_RAW_TEXT_KEY = resumeStorage.keys.rawText;
 const BUILTIN_MODEL = modelStorage.DEFAULT_MODEL;
 
 let isImporting = false;
+let isEnrichingAliases = false;
 let markdownEditor = null;
 let isClearingResume = false;
 let isResumeDirty = false;
@@ -93,7 +95,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     return;
   }
 
-  if (isResumeDirty || isImporting || isClearingResume) {
+  if (isResumeDirty || isImporting || isClearingResume || isEnrichingAliases) {
     return;
   }
 
@@ -671,7 +673,7 @@ function removeResumeListItem(sectionKey, itemIndex) {
 
 async function handleClearResume() {
   if (isClearingResume || isLoadingResume) return;
-  if (isImporting || markdownEditor?.isBusy() || uploadPdfBtn.disabled) { updatePageStatus("warning", "资料正在读取或解析，请等待结束后再清空资料。"); return; }
+  if (isImporting || isEnrichingAliases || markdownEditor?.isBusy() || uploadPdfBtn.disabled) { updatePageStatus("warning", "资料正在读取或解析，请等待结束后再清空资料。"); return; }
   const targetId = activeTemplateId;
   if (!targetId) return;
   const templateName = templates.find((t) => t.id === targetId)?.name || "当前模板";
@@ -705,6 +707,49 @@ async function handleClearResume() {
 }
 
 clearResumeBtn.addEventListener("click", handleClearResume);
+
+async function handleEnrichAliases() {
+  if (isEnrichingAliases || isImporting || isClearingResume || isLoadingResume || markdownEditor?.isBusy() || uploadPdfBtn.disabled) return;
+  if (isResumeDirty) { updatePageStatus("warning", "请先保存字段编辑内容，再补充别名。"); return; }
+  const targetId = activeTemplateId;
+  if (!targetId) return;
+  isEnrichingAliases = true; enrichAliasesBtn.disabled = true; uploadPdfBtn.disabled = true;
+  markdownEditor?.setBusy(true);
+  try {
+    const model = await getActiveModel();
+    if (!isModelConfigured(model)) throw new Error("请先在插件设置中配置可用模型");
+    const state = await resumeStorage.loadTemplateState();
+    const beforeTemplate = state.templates.find((t) => t.id === targetId);
+    if (!beforeTemplate || activeTemplateId !== targetId || state.activeTemplateId !== targetId) throw new Error("模板已切换，请重新补充别名");
+    const before = beforeTemplate.profile;
+    if (!schema.getFieldCatalog({ profile: before }).length) throw new Error("请先添加并保存资料字段");
+    const plan = await window.ResumeAliasEnrichment.generate({
+      schema, profile: before, buildPrompt: resumePrompts.buildAliasPrompt, parse: parseJsonFromAiText,
+      callAI: (prompt) => aiClient.callAI(model.id, prompt, "field_aliases"),
+      isCurrent: () => activeTemplateId === targetId && !isResumeDirty && !isClearingResume,
+      onProgress: ({ completed, total }) => { enrichAliasesBtn.textContent = `补充中 ${completed}/${total}...`; },
+    });
+    window.ResumeAliasEnrichment.preview({ document, host: resumeFormHost.parentElement, plan,
+      async onApply(selected) {
+        const fresh = await resumeStorage.loadTemplateState();
+        const current = fresh.templates.find((t) => t.id === targetId);
+        if (activeTemplateId !== targetId || fresh.activeTemplateId !== targetId || isResumeDirty || isImporting || isClearingResume || isEnrichingAliases || !current || current.updatedAt !== beforeTemplate.updatedAt || JSON.stringify(current.profile) !== JSON.stringify(before)) throw new Error("资料或模板已修改，请重新补充别名后核对");
+        if (!selected.length) return;
+        const profile = window.ResumeAliasEnrichment.apply(schema, plan, selected);
+        const saved = await resumeStorage.saveTemplateContent(targetId, { profile, schemaVersion: schema.version });
+        if (!saved) throw new Error("模板已不存在，请重新加载");
+        await loadResumeProfile(); updatePageStatus("success", "所选别名已合并保存，字段名称、内容和原有别名保持不变。");
+      },
+    });
+    updatePageStatus("info", plan.changes.length ? "别名建议已生成，请核对预览后保存。" : "没有可添加的新别名。");
+  } catch (error) { updatePageStatus("error", `补充别名失败：${error.message}`); }
+  finally {
+    isEnrichingAliases = false; enrichAliasesBtn.disabled = false; enrichAliasesBtn.textContent = "AI 补充别名";
+    uploadPdfBtn.disabled = false; markdownEditor?.setBusy(false);
+  }
+}
+
+enrichAliasesBtn.addEventListener("click", handleEnrichAliases);
 
 async function persistResumeProfile({ silent = false } = {}) {
   const customError = customFieldsEditor?.validate();
@@ -776,7 +821,7 @@ resumePdfFileEl.addEventListener("change", async () => {
 });
 
 async function importResumeToSchema(rawText) {
-  if (isImporting || isClearingResume) return;
+  if (isImporting || isClearingResume || isEnrichingAliases) return;
   const text = String(rawText || "").trim();
   if (!text) { updatePageStatus("warning", "请先粘贴 Markdown 或资料文本，或上传 PDF"); return; }
   if (isResumeDirty) { updatePageStatus("warning", "请先保存手动编辑的资料，再进行 AI 解析"); return; }

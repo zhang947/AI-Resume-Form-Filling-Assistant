@@ -72,6 +72,70 @@ test("project names/descriptions remain distinguishable and copy the full exact 
   assert.equal(matcher.search(index, "项目 B").some((item) => item.copyValue === "项目 B 的完整描述"), true);
 });
 
+function projectCandidates(items, extraGroups = []) {
+  const library = schema.normalizeResumeProfile({ groups: [{ name: "项目经历", items }, ...extraGroups] });
+  return { library, entries: matcher.buildIndex(library, schema) };
+}
+
+test("identical project content/description candidates collapse after matching or searching without changing saved fields", () => {
+  const { library, entries } = projectCandidates([{ name: "投前尽调 AI 辅助工具应用", fields: [
+    { name: "项目内容", type: "textarea", value: description, aliases: ["工具成果"] },
+    { name: "项目描述", type: "textarea", value: description, aliases: ["应用说明"] },
+  ] }]);
+  const before = JSON.stringify({ library, entries });
+  for (const query of ["项目介绍", "项目内容", "项目描述", "工具成果", "应用说明"]) {
+    const found = matcher.match(entries, query);
+    assert.equal(found.length, 1, query);
+    assert.equal(found[0].copyValue, description);
+  }
+  for (const query of ["", "投前尽调", "项目内容", "项目描述", "工具成果", "应用说明"]) {
+    assert.equal(matcher.search(entries, query).length, 1, query);
+  }
+  assert.equal(entries.length, 2);
+  assert.equal(JSON.stringify({ library, entries }), before);
+});
+
+test("candidate deduplication keeps different records and groups even when their display names and contents agree", () => {
+  const record = { name: "同名项目", fields: [{ name: "项目描述", value: description }] };
+  const { entries } = projectCandidates([record, record], [{ name: "项目经历", items: [record] }]);
+  assert.equal(matcher.match(entries, "项目介绍").length, 3);
+  assert.equal(matcher.search(entries, "同名项目").length, 3);
+});
+
+test("candidate deduplication compares the full content, not the truncated preview or normalized search text", () => {
+  const prefix = "长文本预览".repeat(40);
+  const { entries } = projectCandidates([{ name: "项目 A", fields: [
+    { name: "项目内容", value: prefix + "\n第一段" },
+    { name: "项目描述", value: prefix + "\n第二段" },
+    { name: "项目说明", value: prefix + "第一段" },
+  ] }]);
+  assert.equal(new Set(entries.map((item) => item.preview)).size, 1);
+  assert.equal(matcher.match(entries, "项目介绍").length, 3);
+  assert.equal(matcher.search(entries, "项目 A").length, 3);
+});
+
+test("equivalent Windows/Unix line endings deduplicate while preserving the original complete copy value", () => {
+  const original = description.replace(/\n/g, "\r\n");
+  const { entries } = projectCandidates([{ name: "项目 A", fields: [
+    { name: "项目内容", value: original }, { name: "项目描述", value: description },
+  ] }]);
+  const found = matcher.match(entries, "项目介绍");
+  assert.equal(found.length, 1);
+  assert.equal(found[0].copyValue, original);
+});
+
+test("equal start and end dates remain separately copyable while repeated dates of the same role deduplicate", () => {
+  const { entries } = projectCandidates([{ name: "项目 A", fields: [
+    { name: "开始时间", type: "date", role: "start", value: "2025-01" },
+    { name: "起始日期", type: "date", role: "start", value: "2025-01" },
+    { name: "结束时间", type: "date", role: "end", value: "2025-01" },
+  ] }]);
+  assert.deepEqual(matcher.match(entries, "项目时间").map((item) => item.key), ["startDate", "endDate"]);
+  assert.equal(matcher.match(entries, "开始时间").length, 1);
+  assert.equal(matcher.match(entries, "结束时间").length, 1);
+  assert.equal(matcher.search(entries, "").length, 2);
+});
+
 test("lookup matches and manual search use fields only, even if Markdown is passed by an old caller", () => {
   const before = JSON.stringify(profile);
   const markdown = "## 教育经历\n学校名称：Markdown专用大学\n开始时间：2090-01\n结束时间：2094-06\n## 项目经历\n项目名称：Markdown专用项目\n项目描述：Markdown专用描述\n## 自我评价\nMarkdown专用评价";

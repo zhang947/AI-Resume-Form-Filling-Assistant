@@ -13,7 +13,7 @@
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function (ownership) {
   "use strict";
-  const VERSION = "selection-lookup-library-v4";
+  const VERSION = "selection-lookup-library-candidates-v7";
   const SETTINGS_KEY = "resumeSelectionLookupEnabled";
   const DATA_KEYS = ["resumeLibraryVersion", "resumeTemplates", "activeResumeTemplateId"];
   async function readSnapshot(storage) {

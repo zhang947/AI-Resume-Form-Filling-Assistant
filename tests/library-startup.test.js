@@ -22,7 +22,7 @@ class Element {
   async emit(type, event = {}) { for (const fn of this.listeners[type] || []) await fn({ target: this, ...event }); }
   scrollIntoView() {}
 }
-async function startPage(file, initial, sharedState) {
+async function startPage(file, initial, sharedState, configure) {
   const html = fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), elements = new Map();
   for (const match of html.matchAll(/<([\w-]+)[^>]*\bid="([^"]+)"[^>]*>/g)) elements.set(match[2], new Element(match[1]));
   const document = new Element(); document.body = new Element('body');
@@ -45,6 +45,7 @@ async function startPage(file, initial, sharedState) {
   context.window = context; vm.createContext(context);
   for (const match of html.matchAll(/<script src="([^"]+)"/g)) {
     if (match[1].startsWith('libs/')) continue;
+    if (match[1] === 'resume-editor.js') configure?.(context);
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', match[1]), 'utf8'), context, { filename: match[1] });
   }
   if (context.ResumeLogExport) context.ResumeLogExport = { ...context.ResumeLogExport, loadProjectRootHandle: async () => null };
@@ -143,4 +144,42 @@ test('an existing configuration import source is staged as an unsaved draft only
   h.state.resumeMarkdownDocumentsV1.a = '';
   const empty = await startPage('resume-editor.html', h.state);
   assert.equal(empty.elements.get('markdownEditor').value, '');
+});
+test('AI alias button generates a preview first and saves only aliases for the selected current template', async () => {
+  const initial = initialLibrary(); initial.builtinModelOverride = { apiKey: 'test-only' }; initial.aiModels = [];
+  let pending, calls = 0;
+  const h = await startPage('resume-editor.html', initial, undefined, (context) => {
+    context.ResumeAiClient = { callAI: async (_id, prompt, mode) => {
+      assert.equal(mode, 'field_aliases'); assert.equal(prompt.includes('当前正文'), false); calls++;
+      const fields = JSON.parse(prompt.split('\n').at(-1)).fields;
+      return JSON.stringify({ fields: fields.map((f) => ({ path: f.path, aliases: ['新的匹配词'] })) });
+    } };
+    context.ResumeAliasEnrichment = { ...context.ResumeAliasEnrichment, preview: (args) => pending = args };
+  });
+  const before = structuredClone(h.state.resumeTemplates), markdown = structuredClone(h.state.resumeMarkdownDocumentsV1);
+  await h.elements.get('enrichAliasesBtn').emit('click');
+  assert.equal(calls, 1); assert.equal(pending.plan.changes.length, 1); assert.deepEqual(h.state.resumeTemplates, before);
+  await pending.onApply(pending.plan.changes);
+  assert.deepEqual(h.state.resumeTemplates.a.profile.groups[0].items[0].fields[0].aliases, ['新的匹配词']);
+  assert.equal(h.state.resumeTemplates.a.profile.groups[0].items[0].fields[0].value, '当前正文');
+  assert.equal(h.state.resumeTemplates.a.rawText, before.a.rawText);
+  assert.deepEqual(h.state.resumeTemplates.b, before.b); assert.deepEqual(h.state.resumeMarkdownDocumentsV1, markdown);
+});
+test('pending alias suggestions cannot overwrite manual drafts, external saves, a cleared template or a new active template', async () => {
+  const initial = initialLibrary(); initial.builtinModelOverride = { apiKey: 'test-only' }; initial.aiModels = []; let pending;
+  const h = await startPage('resume-editor.html', initial, undefined, (context) => {
+    context.ResumeAiClient = { callAI: async (_id, prompt) => JSON.stringify({ fields: JSON.parse(prompt.split('\n').at(-1)).fields.map((f) => ({ path: f.path, aliases: ['匹配别名'] })) }) };
+    context.ResumeAliasEnrichment = { ...context.ResumeAliasEnrichment, preview: (args) => pending = args };
+  });
+  const original = structuredClone(h.state.resumeTemplates.a);
+  await h.elements.get('enrichAliasesBtn').emit('click');
+  vm.runInContext('customFieldsEditor.addGroup()', h.context);
+  await assert.rejects(pending.onApply(pending.plan.changes), /已修改/);
+  vm.runInContext('isResumeDirty = false', h.context);
+  h.state.resumeTemplates.a.updatedAt = 'changed'; await assert.rejects(pending.onApply(pending.plan.changes), /已修改/);
+  h.state.resumeTemplates.a = structuredClone(original); h.state.activeResumeTemplateId = 'b';
+  await assert.rejects(pending.onApply(pending.plan.changes), /已修改/);
+  h.state.activeResumeTemplateId = 'a'; await h.elements.get('clearResumeBtn').emit('click');
+  await assert.rejects(pending.onApply(pending.plan.changes), /已修改/);
+  assert.deepEqual(h.state.resumeTemplates.a.profile, { groups: [] });
 });

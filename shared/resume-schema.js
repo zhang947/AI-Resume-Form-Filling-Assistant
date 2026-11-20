@@ -1,13 +1,20 @@
 (function (root) {
   "use strict";
-  if (root.ResumeSchema?.version >= 6) return;
+  if (root.ResumeSchema?.version >= 7) return;
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const text = (value) => String(value ?? "").trim();
   function makeId(prefix) {
     return `${prefix}-${root.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
   }
-  function aliases(value) {
-    return [...new Set((Array.isArray(value) ? value : String(value || "").split(/[,，;；、\n]/)).map(text).filter(Boolean))];
+  function aliases(value, name = "") {
+    const key = (value) => text(value).normalize("NFKC").toLowerCase().replace(/[\s*＊:：]/g, "");
+    const seen = new Set([key(name)]), result = [];
+    for (const alias of (Array.isArray(value) ? value : String(value || "").split(/[,，;；、\n]/)).map(text)) {
+      const normalized = key(alias);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized); result.push(alias);
+    }
+    return result;
   }
   function normalizeDateValue(value) {
     const raw = text(value), match = raw.match(/^(\d{4})(?:[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?)?$/);
@@ -28,7 +35,7 @@
         id: id(item.id, "i", `${g}-${i}`), name: text(item.name),
         fields: (Array.isArray(item.fields) ? item.fields : []).filter((v) => v && typeof v === "object").map((field, f) => {
           const type = ["text", "textarea", "date"].includes(field.type) ? field.type : "text";
-          return { id: id(field.id, "f", `${g}-${i}-${f}`), name: text(field.name), aliases: aliases(field.aliases), type,
+          return { id: id(field.id, "f", `${g}-${i}-${f}`), name: text(field.name), aliases: aliases(field.aliases, field.name), type,
             value: type === "date" ? normalizeDateValue(field.value) : String(field.value ?? ""),
             role: ["start", "end"].includes(field.role) ? field.role : "" };
         }),
@@ -50,7 +57,7 @@
     return (profile?.groups || []).flatMap((group) => (group.items || []).flatMap((item) => (item.fields || []).map((field) => ({
       path: `groups.${group.id}.items.${item.id}.fields.${field.id}.value`,
       sectionKey: group.id, sectionLabel: group.name, itemLabel: item.name, label: field.name,
-      aliases: field.aliases || [], input: field.type, role: field.role || "", options: [], placeholder: "",
+      aliases: aliases(field.aliases, field.name), input: field.type, role: field.role || "", options: [], placeholder: "",
     }))));
   }
   function getCatalogWithValues(profile) {
@@ -78,9 +85,9 @@
     }
     return "";
   }
-  root.ResumeSchema = Object.freeze({ version: 6, sections: Object.freeze([]),
+  root.ResumeSchema = Object.freeze({ version: 7, sections: Object.freeze([]),
     createEmptyResumeProfile: () => ({ groups: [] }), normalizeResumeProfile, createGroup, createItem, createField,
-    getFieldCatalog, getCatalogWithValues, getValueByPath, setValueByPath, validateProfile, normalizeDateValue,
+    getFieldCatalog, getCatalogWithValues, getValueByPath, setValueByPath, validateProfile, normalizeDateValue, normalizeAliases: aliases,
     hasAnyFilledField: (profile) => getCatalogWithValues(profile).some((field) => field.hasValue),
     getCustomFieldsFingerprint: (profile) => JSON.stringify(normalizeResumeProfile(profile)),
     createImportTemplateString: () => JSON.stringify({ groups: [] }, null, 2),

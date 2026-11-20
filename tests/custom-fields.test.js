@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const { loadSchema, profileFor, plain } = require("./library-fixture.cjs");
 const editorModule = require("../shared/custom-fields-editor.js");
 const importer = require("../shared/library-import.js");
+const aliasTools = require("../shared/alias-enrichment.js");
 const matcher = require("../shared/selection-lookup-matcher.js");
 const schema = loadSchema();
 const source = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8").replace(/\r\n/g, "\n");
@@ -56,6 +57,20 @@ class Node {
   scrollIntoView() {}
 }
 const walk = (node) => [node, ...node.children.flatMap(walk)];
+test("alias preview lets users deselect proposals, cancel without writes and retry a failed save without executing field text", async () => {
+  const profile = info(), field = schema.getFieldCatalog({ profile })[0];
+  const plan = aliasTools.prepare(schema, profile, [{ path: field.path, aliases: ['另一种字段叫法', '<img onerror=bad()>'] }]);
+  const host = new Node('div'), document = { createElement: (tag) => new Node(tag), createTextNode: (text) => Object.assign(new Node('span'), { textContent: text }) };
+  let writes = 0, fail = true;
+  const panel = aliasTools.preview({ document, host, plan, onApply: async (selected) => { if (fail) throw new Error('save failed'); writes++; assert.equal(selected.length, 1); } });
+  const checkbox = walk(panel).find((n) => n.tagName === 'INPUT'), save = walk(panel).find((n) => n.textContent === '保存所选别名');
+  assert.equal(walk(panel).some((n) => n.tagName === 'IMG'), false);
+  checkbox.checked = false; await checkbox.emit('change'); assert.equal(save.disabled, true);
+  checkbox.checked = true; await checkbox.emit('change'); await save.emit('click'); assert.equal(save.disabled, false); assert.equal(writes, 0);
+  fail = false; await save.emit('click'); assert.equal(writes, 1); assert.equal(host.children.length, 0);
+  const cancelled = aliasTools.preview({ document, host, plan, onApply: async () => writes++ });
+  await walk(cancelled).find((n) => n.textContent === '取消').emit('click'); assert.equal(writes, 1); assert.equal(host.children.length, 0);
+});
 function editorHarness() {
   const host = new Node("div"), nav = new Node("aside"), document = { createElement: (tag) => new Node(tag) };
   let changes = 0;
@@ -185,7 +200,7 @@ for (const file of ["popup.js", "resume-editor.js"]) {
     const text = source(file), before = info(), logs = [], writes = [];
     let preview, aiCalls = 0;
     const state = { activeTemplateId: "a", templates: [{ id: "a", profile: before }] };
-    const context = { schema, activeTemplateId: "a", isResumeDirty: false, isImporting: false, isClearingResume: false,
+    const context = { schema, activeTemplateId: "a", isResumeDirty: false, isImporting: false, isClearingResume: false, isEnrichingAliases: false,
       importResumeBtn: {}, uploadPdfBtn: {}, resumeFormHost: { parentElement: {} }, document: {},
       resumeStorage: { loadTemplateState: async () => plain(state), saveTemplateContent: async (id, value) => writes.push({ id, value }) },
       getActiveModel: async () => ({ id: "model" }), isModelConfigured: () => true,

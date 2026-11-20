@@ -67,10 +67,29 @@
     return Array.from(schema?.getFieldCatalog?.({ profile }) || []).flatMap((field) => {
       const inferred = ruleFor(field.label);
       const roleKey = field.role === "start" ? "startDate" : field.role === "end" ? "endDate" : null;
+      const aliasDates = new Set((field.aliases || []).flatMap((alias) => {
+        const keys = ruleFor(alias)?.keys || [];
+        return keys.length === 1 && ["startDate", "endDate"].includes(keys[0]) ? keys : [];
+      }));
+      const aliasDateKey = field.input === "date" && aliasDates.size === 1 ? [...aliasDates][0] : null;
       const item = candidate({ id: `field:${field.path}`, section: scopeFor(field.sectionLabel)?.[0] || "customFields",
-        key: roleKey || (inferred?.keys.length === 1 ? inferred.keys[0] : field.label), label: field.label,
+        key: roleKey || (inferred?.keys.length === 1 ? inferred.keys[0] : aliasDateKey || field.label), label: field.label,
         source: [field.sectionLabel, field.itemLabel].filter(Boolean).join(" · "), value: schema.getValueByPath(profile, field.path) });
       return item ? [{ ...item, aliases: field.aliases, role: field.role }] : [];
+    });
+  }
+  function uniqueCandidates(items) {
+    const seen = new Set();
+    return items.filter((item) => {
+      // Scope by stable group/item IDs, not display names. Compare the full
+      // value, and keep start/end dates separate even when both dates agree.
+      const fieldOffset = item.id.indexOf(".fields.");
+      if (fieldOffset < 0) return true;
+      const dateRole = ["startDate", "endDate"].includes(item.key) ? item.key : "";
+      const identity = JSON.stringify([item.id.slice(0, fieldOffset), dateRole, item.copyValue.replace(/\r\n?/g, "\n")]);
+      if (seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
     });
   }
   function match(index, selectedText, context = "") {
@@ -89,11 +108,11 @@
       const itemId = (entry) => entry.id.split(".fields.")[0];
       found.sort((a, b) => itemId(a) === itemId(b) ? (a.key === "startDate" ? 0 : 1) - (b.key === "startDate" ? 0 : 1) : 0);
     }
-    return found;
+    return uniqueCandidates(found);
   }
   function search(index, text) {
     const query = normalize(text);
-    return index.filter((item) => !query || normalize(`${item.sourceName}\n${(item.aliases || []).join(" ")}\n${item.copyValue}`).includes(query));
+    return uniqueCandidates(index.filter((item) => !query || normalize(`${item.sourceName}\n${(item.aliases || []).join(" ")}\n${item.copyValue}`).includes(query)));
   }
 
   return Object.freeze({ normalize, ruleFor, buildIndex, match, search });

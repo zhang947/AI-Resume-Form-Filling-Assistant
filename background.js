@@ -51,6 +51,7 @@ async function callAI(modelId, prompt, mode) {
   }
 
   const systemPrompts = {
+    field_aliases: `你是网页字段别名补充助手。结合字段分组、条目、名称、类型和时间角色以及提供的同义词参考表，建议语义等价的网页标签。只输出 JSON 字段路径和 aliases 数组，不返回个人资料，不改字段内容，不添加未知路径；不确定时留空，不混淆开始与结束时间。`,
     field_values: globalThis.ResumeFormPlan.SYSTEM_PROMPT,
     resume_import: `你是资料提取助手。根据用户 Markdown 动态建立分组、条目和字段，不受固定简历模板限制。只提取明确信息，不编造事实或意愿，不填缺失信息；保留完整文本和换行。只输出紧凑 JSON，不重复输出原文作为 evidence；仅日期格式转换时需要单个原始日期 evidence。`,
 

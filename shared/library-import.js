@@ -1,8 +1,8 @@
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./alias-enrichment.js") : root.ResumeAliasEnrichment);
   if (typeof module === "object" && module.exports) module.exports = api;
   root.ResumeLibraryImport = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (aliasTools) {
   "use strict";
   const key = (value) => String(value || "").normalize("NFKC").trim().toLowerCase();
   // Only split at paragraph/heading boundaries. Never cut a JSON response or a
@@ -67,6 +67,9 @@
     if (!parsed || !Array.isArray(parsed.groups)) throw new Error("AI 结果缺少 groups，请重新解析");
     const incoming = schema.normalizeResumeProfile(parsed), error = schema.validateProfile(incoming);
     if (error) throw new Error(error);
+    for (const group of incoming.groups) for (const item of group.items) for (const field of item.fields) {
+      field.aliases = aliasTools.sanitizeAliases(field, field.aliases);
+    }
     const original = String(source || "").replace(/\r\n/g, "\n");
     const unindent = (text) => text.replace(/^[ \t]+/gm, "");
     const containsQuote = (container, quote) => container.includes(quote) || unindent(container).includes(unindent(quote));
@@ -114,7 +117,7 @@
       let item = group.items.find((i) => key(i.name) === key(change.itemName));
       if (!item) { item = schema.createItem({ name: change.itemName }); group.items.push(item); }
       const existing = item.fields.find((f) => key(f.name) === key(change.field.name));
-      if (existing) Object.assign(existing, change.field, { id: existing.id });
+      if (existing) Object.assign(existing, change.field, { id: existing.id, aliases: schema.normalizeAliases([...existing.aliases, ...change.field.aliases], change.field.name) });
       else item.fields.push(schema.createField(change.field));
     }
     return next;
@@ -134,6 +137,7 @@
       card.append(label);
       if (plan.conflicts.includes(change)) { const previous = doc.createElement("pre"); previous.textContent = `原值：${change.previous}`; card.append(previous); }
       const value = doc.createElement("pre"); value.textContent = change.field.value; card.append(value); panel.append(card);
+      if (change.field.aliases.length) { const aliases = doc.createElement("p"); aliases.className = "tip"; aliases.textContent = `匹配别名：${change.field.aliases.join("、")}`; card.append(aliases); }
       checks.push({ checkbox, change });
     }
     const status = doc.createElement("p"); status.setAttribute("role", "status");

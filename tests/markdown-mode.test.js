@@ -299,11 +299,12 @@ test("the original AI gateway supports all existing modes alongside the Markdown
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, "../background.js"), "utf8"), context);
-  for (const mode of ["resume_import", "field_mapping", "field_values"]) await context.callAI("test", "test prompt", mode);
-  assert.equal(requests.length, 3);
+  for (const mode of ["resume_import", "field_mapping", "field_values", "field_aliases"]) await context.callAI("test", "test prompt", mode);
+  assert.equal(requests.length, 4);
   assert.ok(requests.every((request) => request.model === "test-model"));
   assert.match(requests[1].messages[0].content, /resumePath/);
   assert.equal(requests[2].messages[0].content, plan.SYSTEM_PROMPT);
+  assert.match(requests[3].messages[0].content, /别名/);
 });
 
 test("Markdown expansion and candidate activation cannot click implicit submit buttons or navigation links", () => {

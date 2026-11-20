@@ -44,3 +44,19 @@ test("duplicate imported IDs are repaired without losing any content", () => {
   assert.ok(fields.every((f) => /^f-[a-z0-9-]+$/.test(f.id)));
   assert.deepEqual(fields.map((f) => f.value), ["one", "two", "three"]);
 });
+test("normalization removes aliases equivalent to the field name and repeated spelling variants while preserving real synonyms", () => {
+  const profile = profileFor([{ name: "Email", value: "person@example.test", aliases: ["Email", " email ", "ＥＭＡＩＬ", "E mail", "电子邮箱", " 电子邮箱 ", "邮箱", "邮箱："] }]);
+  assert.deepEqual(profile.groups[0].items[0].fields[0].aliases, ["电子邮箱", "邮箱"]);
+  assert.equal(profile.groups[0].items[0].fields[0].name, "Email");
+  assert.equal(profile.groups[0].items[0].fields[0].value, "person@example.test");
+  assert.deepEqual(plain(schema.normalizeResumeProfile(profile)), profile);
+});
+test("legacy saved aliases and renamed fields are deduplicated per field, without removing aliases shared by different records", () => {
+  const profile = profileFor([{ name: "学校", value: "某大学", aliases: ["毕业院校", "就读院校"] }, { name: "另一院校字段", value: "另一大学", aliases: ["毕业院校"] }]);
+  profile.groups[0].items[0].fields[0].name = "毕业院校";
+  profile.groups[0].items[0].fields[0].aliases.push("毕业院校", " 就读院校 ");
+  const catalog = schema.getFieldCatalog({ profile });
+  assert.deepEqual(plain(catalog[0].aliases), ["就读院校"]);
+  assert.deepEqual(plain(catalog[1].aliases), ["毕业院校"]);
+  assert.deepEqual(plain(schema.normalizeResumeProfile(profile).groups[0].items[0].fields[0].aliases), ["就读院校"]);
+});

@@ -1231,3 +1231,5 @@ body {
 .library-import-preview { grid-column: 1 / -1; min-width: 0; padding: 16px; }
 .library-import-preview pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font: inherit; }
 .library-import-preview > button { margin: 8px 8px 0 0; }
+.alias-preview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.alias-preview .custom-field-card p { margin-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
